@@ -19,6 +19,9 @@
 #define RAPIDJSON_OPTIMIZED_WRITER_H
 
 #include "writer.h"
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 BUTIL_RAPIDJSON_NAMESPACE_BEGIN
 
@@ -79,6 +82,35 @@ protected:
             size_t index = 0;
             size_t pos = 0;
             while (pos < length) {
+#if defined(__SSE2__)
+                if (sizeof(Ch) == 1) {
+                    const __m128i quote = _mm_set1_epi8('"');
+                    const __m128i backslash = _mm_set1_epi8('\\');
+                    const __m128i ctrl_max = _mm_set1_epi8(0x1F);
+                    while (pos + 16 <= length) {
+                        const __m128i chunk = _mm_loadu_si128(
+                            reinterpret_cast<const __m128i*>(str + pos));
+                        const __m128i eq_quote = _mm_cmpeq_epi8(chunk, quote);
+                        const __m128i eq_backslash =
+                            _mm_cmpeq_epi8(chunk, backslash);
+                        const __m128i is_ctrl = _mm_cmpeq_epi8(
+                            _mm_max_epu8(chunk, ctrl_max), ctrl_max);
+                        const __m128i need_escape = _mm_or_si128(
+                            _mm_or_si128(eq_quote, eq_backslash), is_ctrl);
+                        const int mask = _mm_movemask_epi8(need_escape);
+                        if (mask == 0) {
+                            pos += 16;
+                        } else {
+                            pos += static_cast<size_t>(
+                                __builtin_ctz(static_cast<unsigned int>(mask)));
+                            break;
+                        }
+                    }
+                    if (pos >= length) {
+                        break;
+                    }
+                }
+#endif
                 Ch c = str[pos];
                 if ((sizeof(Ch) == 1 || (unsigned)c < 256) && escape[(unsigned char)c]) {
                     Base::os_->Puts(str + index, pos - index);

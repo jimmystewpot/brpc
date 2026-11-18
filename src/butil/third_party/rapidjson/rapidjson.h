@@ -293,6 +293,20 @@
     If any of these symbols is defined, RapidJSON defines the macro
     \c RAPIDJSON_SIMD to indicate the availability of the optimized code.
 */
+#if defined(__clang__)
+#if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer)
+#define BUTIL_RAPIDJSON_SANITIZER_ACTIVE 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_MEMORY__)
+#define BUTIL_RAPIDJSON_SANITIZER_ACTIVE 1
+#endif
+#if !defined(RAPIDJSON_SSE2) && !defined(RAPIDJSON_SSE42) && \
+    !defined(BUTIL_RAPIDJSON_SANITIZER_ACTIVE)
+#if defined(__SSE2__)
+#define RAPIDJSON_SSE2
+#endif
+#endif
 #if defined(RAPIDJSON_SSE2) || defined(RAPIDJSON_SSE42) \
     || defined(RAPIDJSON_DOXYGEN_RUNNING)
 #define RAPIDJSON_SIMD

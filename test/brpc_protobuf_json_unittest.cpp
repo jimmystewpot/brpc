@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include <sys/mman.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <gtest/gtest.h>
+#include <cstring>
 #include <iostream>
 #include <fstream>
 #include <limits>
@@ -25,7 +28,11 @@
 #include "butil/iobuf.h"
 #include "butil/string_printf.h"
 #include "butil/strings/string_util.h"
+#include "butil/third_party/rapidjson/document.h"
+#include "butil/third_party/rapidjson/optimized_writer.h"
 #include "butil/third_party/rapidjson/rapidjson.h"
+#include "butil/third_party/rapidjson/stringbuffer.h"
+#include "butil/third_party/rapidjson/writer.h"
 #include "butil/time.h"
 #include "butil/memory/scope_guard.h"
 #include "gperftools_helper.h"
@@ -1991,4 +1998,293 @@ TEST_F(ProtobufJsonTest, pb_to_proto_json) {
     ASSERT_NE(json2.find(R"("office":"Shanghai")"), std::string::npos);
 }
 
-} // namespace
+static std::string WriteStringScalarReference(const char* str, size_t length) {
+    static const char hexDigits[16] = {'0', '1', '2', '3', '4', '5', '6', '7',
+                                       '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+    static const char escape[256] = {
+#define ESCAPE_ZERO_16 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        // 0    1    2    3    4    5    6    7    8    9    A    B    C    D E
+        // F
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'b',
+        't',
+        'n',
+        'u',
+        'f',
+        'r',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        'u',
+        0,
+        0,
+        '"',
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        '\\',
+        0,
+        0,
+        0,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16,
+        ESCAPE_ZERO_16
+#undef ESCAPE_ZERO_16
+    };
+    BUTIL_RAPIDJSON_NAMESPACE::StringBuffer os;
+    os.Put('\"');
+    size_t index = 0;
+    size_t pos = 0;
+    while (pos < length) {
+        char c = str[pos];
+        if (escape[static_cast<unsigned char>(c)]) {
+            os.Puts(str + index, pos - index);
+            index = pos + 1;
+            os.Put('\\');
+            os.Put(escape[static_cast<unsigned char>(c)]);
+            if (escape[static_cast<unsigned char>(c)] == 'u') {
+                os.Put('0');
+                os.Put('0');
+                os.Put(hexDigits[static_cast<unsigned char>(c) >> 4]);
+                os.Put(hexDigits[static_cast<unsigned char>(c) & 0xF]);
+            }
+        }
+        pos++;
+    }
+    if (index < length) {
+        os.Puts(str + index, length - index);
+    }
+    os.Put('\"');
+    return std::string(os.GetString(), os.GetSize());
+}
+
+static std::string RunOptimizedWriter(const char* str, size_t length) {
+    BUTIL_RAPIDJSON_NAMESPACE::StringBuffer os;
+    BUTIL_RAPIDJSON_NAMESPACE::OptimizedWriter<
+        BUTIL_RAPIDJSON_NAMESPACE::StringBuffer>
+        writer(os);
+    EXPECT_TRUE(writer.String(
+        str, static_cast<BUTIL_RAPIDJSON_NAMESPACE::SizeType>(length)));
+    return std::string(os.GetString(), os.GetSize());
+}
+
+static std::string RunBaseWriter(const char* str, size_t length) {
+    BUTIL_RAPIDJSON_NAMESPACE::StringBuffer os;
+    BUTIL_RAPIDJSON_NAMESPACE::Writer<BUTIL_RAPIDJSON_NAMESPACE::StringBuffer>
+        writer(os);
+    EXPECT_TRUE(writer.String(
+        str, static_cast<BUTIL_RAPIDJSON_NAMESPACE::SizeType>(length)));
+    return std::string(os.GetString(), os.GetSize());
+}
+
+TEST_F(ProtobufJsonTest, rapidjson_simd_whitespace_and_macro) {
+#if defined(__SSE2__) && !defined(BUTIL_RAPIDJSON_SANITIZER_ACTIVE)
+#if defined(RAPIDJSON_SIMD) && defined(RAPIDJSON_SSE2)
+    SUCCEED();
+#else
+    FAIL() << "RAPIDJSON_SIMD and RAPIDJSON_SSE2 should be enabled when "
+              "__SSE2__ is defined and sanitizers are inactive";
+#endif
+#endif
+
+    const char kWsChars[4] = {' ', '\t', '\n', '\r'};
+    alignas(16) char aligned_buf[1024];
+    for (size_t ws_len = 0; ws_len <= 128; ++ws_len) {
+        std::string ws(ws_len, ' ');
+        for (size_t i = 0; i < ws_len; ++i) {
+            ws[i] = kWsChars[i & 3];
+        }
+        std::string payload = ws + "{\"name\":" + ws + "\"simd_user\"," + ws +
+                              "\"id\":" + ws + "42," + ws +
+                              "\"datadouble\":" + ws + "3.5}" + ws;
+        for (size_t align_offset = 0; align_offset < 16; ++align_offset) {
+            ASSERT_LT(align_offset + payload.size() + 1, sizeof(aligned_buf));
+            char* ptr = aligned_buf + align_offset;
+            std::memcpy(ptr, payload.data(), payload.size() + 1);
+
+            BUTIL_RAPIDJSON_NAMESPACE::Document doc;
+            doc.Parse(ptr);
+            ASSERT_FALSE(doc.HasParseError())
+                << "ws_len=" << ws_len << " align_offset=" << align_offset;
+            ASSERT_TRUE(doc.IsObject());
+            ASSERT_STREQ("simd_user", doc["name"].GetString());
+            ASSERT_EQ(42, doc["id"].GetInt());
+
+            Person person;
+            std::string err;
+            ASSERT_TRUE(
+                json2pb::JsonToProtoMessage(std::string(ptr), &person, &err))
+                << err << " ws_len=" << ws_len
+                << " align_offset=" << align_offset;
+            EXPECT_EQ("simd_user", person.name());
+            EXPECT_EQ(42, person.id());
+            EXPECT_DOUBLE_EQ(3.5, person.datadouble());
+        }
+    }
+}
+
+TEST_F(ProtobufJsonTest, optimized_writer_differential_and_guard_page) {
+    // 1. Differential test across all 256 byte values (0x00..0xFF) at offsets
+    // 0..63 inside strings of lengths 1..96.
+    for (int byte_val = 0; byte_val < 256; ++byte_val) {
+        for (size_t len = 1; len <= 96; ++len) {
+            std::string s(len, 'a');
+            const size_t max_pos = len < 64 ? len : 64;
+            for (size_t pos = 0; pos < max_pos; ++pos) {
+                s[pos] = static_cast<char>(byte_val);
+                const std::string expected_scalar =
+                    WriteStringScalarReference(s.data(), s.size());
+                const std::string actual_opt =
+                    RunOptimizedWriter(s.data(), s.size());
+                ASSERT_EQ(expected_scalar, actual_opt)
+                    << "byte_val=" << byte_val << " len=" << len
+                    << " pos=" << pos;
+                if (byte_val < 0x80) {
+                    const std::string expected_base =
+                        RunBaseWriter(s.data(), s.size());
+                    ASSERT_EQ(expected_base, actual_opt)
+                        << "byte_val=" << byte_val << " len=" << len
+                        << " pos=" << pos;
+                } else {
+                    // Verify multi-byte UTF-8 high bytes 0x80..0xFF are NOT
+                    // escaped.
+                    ASSERT_EQ(len + 2, actual_opt.size())
+                        << "High byte " << byte_val
+                        << " was unexpectedly escaped";
+                }
+                s[pos] = 'a';
+            }
+        }
+    }
+
+    // 2. Multiple escapable bytes within the same 16-byte SSE2 chunk, at chunk
+    // boundaries (15, 16, 31, 32), and in the tail.
+    const size_t kBoundaryOffsets[] = {0,  1,  7,  14, 15, 16, 17, 30,
+                                       31, 32, 33, 47, 48, 63, 64};
+    const char kEscapables[] = {'\"', '\\', '\n', '\r',   '\t',
+                                '\b', '\f', '\0', '\x01', '\x1f'};
+    for (size_t len : {16, 31, 32, 33, 48, 64, 79, 96}) {
+        for (char esc1 : kEscapables) {
+            for (char esc2 : kEscapables) {
+                std::string s(len, 'x');
+                for (size_t off : kBoundaryOffsets) {
+                    if (off < len) {
+                        s[off] = esc1;
+                    }
+                    if (off + 1 < len) {
+                        s[off + 1] = esc2;
+                    }
+                }
+                const std::string expected_scalar =
+                    WriteStringScalarReference(s.data(), s.size());
+                const std::string expected_base =
+                    RunBaseWriter(s.data(), s.size());
+                const std::string actual_opt =
+                    RunOptimizedWriter(s.data(), s.size());
+                ASSERT_EQ(expected_scalar, actual_opt);
+                ASSERT_EQ(expected_base, actual_opt);
+            }
+        }
+    }
+
+    // 3. Guard-page boundary test (mmap + mprotect PROT_NONE).
+    const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    void* mapping = mmap(nullptr, page_size * 2, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(MAP_FAILED, mapping);
+    ASSERT_EQ(0, mprotect(static_cast<char*>(mapping) + page_size, page_size,
+                          PROT_NONE));
+    char* page_end = static_cast<char*>(mapping) + page_size;
+    for (size_t len = 0; len <= 64; ++len) {
+        char* str_At_boundary = page_end - len;
+        std::memset(str_At_boundary, 'A', len);
+        ASSERT_EQ(WriteStringScalarReference(str_At_boundary, len),
+                  RunOptimizedWriter(str_At_boundary, len));
+        if (len > 0) {
+            str_At_boundary[0] = '\"';
+            str_At_boundary[len - 1] = '\n';
+            ASSERT_EQ(WriteStringScalarReference(str_At_boundary, len),
+                      RunOptimizedWriter(str_At_boundary, len));
+        }
+    }
+    ASSERT_EQ(0, munmap(mapping, page_size * 2));
+
+    // 4. Throughput benchmark across 16 B, 64 B, 256 B, and 4096 B strings.
+    for (size_t bench_len : {16, 64, 256, 4096}) {
+        std::string payload(bench_len, 'k');
+        const int iters = bench_len <= 256 ? 100000 : 20000;
+        butil::Timer timer;
+        timer.start();
+        size_t total_out = 0;
+        for (int i = 0; i < iters; ++i) {
+            BUTIL_RAPIDJSON_NAMESPACE::StringBuffer os;
+            BUTIL_RAPIDJSON_NAMESPACE::OptimizedWriter<
+                BUTIL_RAPIDJSON_NAMESPACE::StringBuffer>
+                writer(os);
+            writer.String(payload.data(),
+                          static_cast<BUTIL_RAPIDJSON_NAMESPACE::SizeType>(
+                              payload.size()));
+            total_out += os.GetSize();
+        }
+        timer.stop();
+        const double elapsed_s = timer.n_elapsed() / 1e9;
+        const double mb_per_s = (static_cast<double>(bench_len) * iters) /
+                                (1024.0 * 1024.0) / elapsed_s;
+        printf("OptimizedWriter benchmark len=%zu: %.2f MB/s (total_out=%zu)\n",
+               bench_len, mb_per_s, total_out);
+    }
+}
+
+}  // namespace
