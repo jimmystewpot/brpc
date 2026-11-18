@@ -97,18 +97,6 @@ target_include_directories(butil_build_config BEFORE INTERFACE
     ${Protobuf_INCLUDE_DIRS})
 target_include_directories(butil_build_config INTERFACE ${BUTIL_INCLUDE_DIRS})
 
-set(butil_crc32c_options)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
-        # Only CRC32C needs the SSE4.2 intrinsics and feature macro.
-        list(APPEND butil_crc32c_options -msse4.2)
-    endif()
-endif()
-if(butil_crc32c_options)
-    set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/crc32c.cc
-        APPEND PROPERTY COMPILE_OPTIONS ${butil_crc32c_options})
-endif()
-
 # the reason why not using file(GLOB_RECURSE...) is that we want to
 # include different files on different platforms.
 set(BUTIL_SOURCES
@@ -297,7 +285,6 @@ endif()
 add_library(BUTIL_LIB OBJECT ${BUTIL_SOURCES})
 target_link_libraries(BUTIL_LIB PRIVATE butil_build_config)
 set_property(TARGET BUTIL_LIB PROPERTY POSITION_INDEPENDENT_CODE 1)
-set_property(TARGET BUTIL_LIB PROPERTY BRPC_CRC32C_COMPILE_OPTIONS "${butil_crc32c_options}")
 set_property(TARGET BUTIL_LIB PROPERTY BRPC_BUNDLE_LIBRARIES "${butil_libraries}")
 set_property(TARGET BUTIL_LIB PROPERTY BRPC_PRIVATE_LIBS "${butil_private_libs}")
 set_property(TARGET BUTIL_LIB PROPERTY BRPC_BUNDLE_SYSTEM_LIBRARIES "${butil_system_libraries}")

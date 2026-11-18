@@ -213,12 +213,6 @@ endif()
 
 # Read module-owned sources from their targets, not parent-scope variables.
 get_target_property(BUTIL_SOURCES BUTIL_LIB SOURCES)
-# Source properties are directory-scoped; reuse production CRC32C settings.
-get_target_property(butil_crc32c_options BUTIL_LIB BRPC_CRC32C_COMPILE_OPTIONS)
-if(butil_crc32c_options)
-    set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/../src/butil/crc32c.cc
-        APPEND PROPERTY COMPILE_OPTIONS ${butil_crc32c_options})
-endif()
 get_target_property(BVAR_SOURCES BVAR_LIB SOURCES)
 set(SOURCES)
 foreach(component BVAR BTHREAD JSON2PB MCPACK2PB BRPC)
