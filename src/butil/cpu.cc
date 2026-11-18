@@ -25,54 +25,141 @@
 
 namespace butil {
 
+namespace internal {
+
+#if !defined(UNIT_TEST)
+enum X86ExtFeatureBits : uint8_t {
+    kExtFeaturePclmulqdq = 1 << 0,
+    kExtFeatureAvx2 = 1 << 1,
+    kExtFeatureBmi1 = 1 << 2,
+    kExtFeatureBmi2 = 1 << 3,
+    kExtFeatureFma3 = 1 << 4,
+    kExtFeatureAvx512f = 1 << 5,
+    kExtFeatureFastAvx512 = 1 << 6,
+};
+#endif
+
+#if !defined(UNIT_TEST)
+static
+#endif
+    uint8_t ComputeX86ExtendedFeatures(uint32_t num_ids, uint32_t leaf1_ecx,
+                                       uint32_t leaf7_ebx, uint32_t leaf7_ecx,
+                                       uint64_t xcr0) {
+    uint8_t ext = 0;
+    const bool has_osxsave =
+        (leaf1_ecx & 0x04000000U) != 0 && (leaf1_ecx & 0x08000000U) != 0;
+    const bool has_avx_os = has_osxsave && ((xcr0 & 0x6U) == 0x6U);
+    const bool has_avx = (leaf1_ecx & 0x10000000U) != 0 && has_avx_os;
+    // XCR0 bits 1 (XMM), 2 (YMM), 5 (opmask k0-k7), 6 (ZMM_Hi256), 7 (Hi16_ZMM)
+    // = 0xe6.
+    const bool has_avx512_os = has_osxsave && ((xcr0 & 0xe6U) == 0xe6U);
+
+    if ((leaf1_ecx & (1U << 1)) != 0) {
+        ext |= kExtFeaturePclmulqdq;
+    }
+    if ((leaf1_ecx & (1U << 12)) != 0 && has_avx) {
+        ext |= kExtFeatureFma3;
+    }
+    if (num_ids >= 7U) {
+        if ((leaf7_ebx & (1U << 3)) != 0) {
+            ext |= kExtFeatureBmi1;
+        }
+        if ((leaf7_ebx & (1U << 5)) != 0 && has_avx) {
+            ext |= kExtFeatureAvx2;
+        }
+        if ((leaf7_ebx & (1U << 8)) != 0) {
+            ext |= kExtFeatureBmi2;
+        }
+        if ((leaf7_ebx & (1U << 16)) != 0 && has_avx512_os) {
+            ext |= kExtFeatureAvx512f;
+        }
+        // Ice Lake / AMD Zen 4 non-downclocking AVX-512 bundle:
+        // EBX: AVX512F (16) | AVX512DQ (17) | AVX512CD (28) | AVX512BW (30) |
+        // AVX512VL (31) ECX: AVX512_VBMI (1) | AVX512_VBMI2 (6)
+        const uint32_t kIcelakeEbxMask =
+            (1U << 16) | (1U << 17) | (1U << 28) | (1U << 30) | (1U << 31);
+        const uint32_t kIcelakeEcxMask = (1U << 1) | (1U << 6);
+        if (has_avx512_os && (leaf7_ebx & kIcelakeEbxMask) == kIcelakeEbxMask &&
+            (leaf7_ecx & kIcelakeEcxMask) == kIcelakeEcxMask) {
+            ext |= kExtFeatureFastAvx512;
+        }
+    }
+    return ext;
+}
+
+}  // namespace internal
+
 CPU::CPU()
-  : signature_(0),
-    type_(0),
-    family_(0),
-    model_(0),
-    stepping_(0),
-    ext_model_(0),
-    ext_family_(0),
-    has_mmx_(false),
-    has_sse_(false),
-    has_sse2_(false),
-    has_sse3_(false),
-    has_ssse3_(false),
-    has_sse41_(false),
-    has_sse42_(false),
-    has_avx_(false),
-    has_avx_hardware_(false),
-    has_aesni_(false),
-    has_non_stop_time_stamp_counter_(false),
-    cpu_vendor_("unknown") {
-  Initialize();
+    : signature_(0),
+      type_(0),
+      family_(0),
+      model_(0),
+      stepping_(0),
+      ext_model_(0),
+      ext_family_(0),
+      has_mmx_(false),
+      has_sse_(false),
+      has_sse2_(false),
+      has_sse3_(false),
+      has_ssse3_(false),
+      has_sse41_(false),
+      has_sse42_(false),
+      has_avx_(false),
+      has_avx_hardware_(false),
+      has_aesni_(false),
+      has_non_stop_time_stamp_counter_(false),
+      ext_features_(0),
+      cpu_vendor_("unknown") {
+    Initialize();
 }
 
 namespace {
 
 #if defined(ARCH_CPU_X86_FAMILY)
-#ifndef _MSC_VER
+#if defined(_MSC_VER)
+
+void CpuidEx(int cpu_info[4], int info_type, int info_index) {
+    __cpuidex(cpu_info, info_type, info_index);
+}
+
+#else
 
 #if defined(__pic__) && defined(__i386__)
 
 void __cpuid(int cpu_info[4], int info_type) {
-  __asm__ volatile (
-    "mov %%ebx, %%edi\n"
-    "cpuid\n"
-    "xchg %%edi, %%ebx\n"
-    : "=a"(cpu_info[0]), "=D"(cpu_info[1]), "=c"(cpu_info[2]), "=d"(cpu_info[3])
-    : "a"(info_type)
-  );
+    __asm__ volatile(
+        "mov %%ebx, %%edi\n"
+        "cpuid\n"
+        "xchg %%edi, %%ebx\n"
+        : "=a"(cpu_info[0]), "=D"(cpu_info[1]), "=c"(cpu_info[2]),
+          "=d"(cpu_info[3])
+        : "a"(info_type), "c"(0));
+}
+
+void CpuidEx(int cpu_info[4], int info_type, int info_index) {
+    __asm__ volatile(
+        "mov %%ebx, %%edi\n"
+        "cpuid\n"
+        "xchg %%edi, %%ebx\n"
+        : "=a"(cpu_info[0]), "=D"(cpu_info[1]), "=c"(cpu_info[2]),
+          "=d"(cpu_info[3])
+        : "0"(info_type), "2"(info_index));
 }
 
 #else
 
 void __cpuid(int cpu_info[4], int info_type) {
-  __asm__ volatile (
-    "cpuid \n\t"
-    : "=a"(cpu_info[0]), "=b"(cpu_info[1]), "=c"(cpu_info[2]), "=d"(cpu_info[3])
-    : "a"(info_type)
-  );
+    __asm__ volatile("cpuid \n\t"
+                     : "=a"(cpu_info[0]), "=b"(cpu_info[1]), "=c"(cpu_info[2]),
+                       "=d"(cpu_info[3])
+                     : "a"(info_type), "c"(0));
+}
+
+void CpuidEx(int cpu_info[4], int info_type, int info_index) {
+    __asm__ volatile("cpuid \n\t"
+                     : "=a"(cpu_info[0]), "=b"(cpu_info[1]), "=c"(cpu_info[2]),
+                       "=d"(cpu_info[3])
+                     : "0"(info_type), "2"(info_index));
 }
 
 #endif
@@ -195,12 +282,21 @@ void CPU::Initialize() {
     // even after following Intel's example code. (See crbug.com/375968.)
     // Because of that, we also test the XSAVE bit because its description in
     // the CPUID documentation suggests that it signals xgetbv support.
-    has_avx_ =
-        has_avx_hardware_ &&
-        (cpu_info[2] & 0x04000000) != 0 /* XSAVE */ &&
-        (cpu_info[2] & 0x08000000) != 0 /* OSXSAVE */ &&
-        (_xgetbv(0) & 6) == 6 /* XSAVE enabled by kernel */;
+    const bool has_xsave = (cpu_info[2] & 0x04000000) != 0 /* XSAVE */ &&
+                           (cpu_info[2] & 0x08000000) != 0 /* OSXSAVE */;
+    const uint64_t xcr0 = has_xsave ? _xgetbv(0) : 0;
+    has_avx_ = has_avx_hardware_ && has_xsave &&
+               (xcr0 & 6) == 6 /* XSAVE enabled by kernel */;
     has_aesni_ = (cpu_info[2] & 0x02000000) != 0;
+
+    int cpu_info7[4] = {0};
+    if (num_ids >= 7) {
+        CpuidEx(cpu_info7, 7, 0);
+    }
+    ext_features_ = internal::ComputeX86ExtendedFeatures(
+        static_cast<uint32_t>(num_ids), static_cast<uint32_t>(cpu_info[2]),
+        static_cast<uint32_t>(cpu_info7[1]),
+        static_cast<uint32_t>(cpu_info7[2]), xcr0);
   }
 
   // Get the brand string of the cpu.
@@ -231,14 +327,16 @@ void CPU::Initialize() {
 }
 
 CPU::IntelMicroArchitecture CPU::GetIntelMicroArchitecture() const {
-  if (has_avx()) return AVX;
-  if (has_sse42()) return SSE42;
-  if (has_sse41()) return SSE41;
-  if (has_ssse3()) return SSSE3;
-  if (has_sse3()) return SSE3;
-  if (has_sse2()) return SSE2;
-  if (has_sse()) return SSE;
-  return PENTIUM;
+    if (has_fast_avx512()) return AVX512F;
+    if (has_avx2()) return AVX2;
+    if (has_avx()) return AVX;
+    if (has_sse42()) return SSE42;
+    if (has_sse41()) return SSE41;
+    if (has_ssse3()) return SSSE3;
+    if (has_sse3()) return SSE3;
+    if (has_sse2()) return SSE2;
+    if (has_sse()) return SSE;
+    return PENTIUM;
 }
 
 }  // namespace butil
