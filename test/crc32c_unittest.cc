@@ -18,6 +18,8 @@
 #include <cstring>
 #include <vector>
 
+#include "butil/cpu.h"
+
 namespace butil {
 namespace crc32c {
 
@@ -37,63 +39,55 @@ uint32_t ExtendSse42PclmulForTesting(uint32_t crc, const char* buf,
 class CRC : public testing::Test {};
 
 TEST_F(CRC, StandardResults) {
-  // From rfc3720 section B.4.
-  char buf[32];
+    // From rfc3720 section B.4.
+    char buf[32];
 
-  memset(buf, 0, sizeof(buf));
-  ASSERT_EQ(0x8a9136aaU, Value(buf, sizeof(buf)));
+    memset(buf, 0, sizeof(buf));
+    ASSERT_EQ(0x8a9136aaU, Value(buf, sizeof(buf)));
 
-  memset(buf, 0xff, sizeof(buf));
-  ASSERT_EQ(0x62a8ab43U, Value(buf, sizeof(buf)));
+    memset(buf, 0xff, sizeof(buf));
+    ASSERT_EQ(0x62a8ab43U, Value(buf, sizeof(buf)));
 
-  for (int i = 0; i < 32; i++) {
-    buf[i] = i;
-  }
-  ASSERT_EQ(0x46dd794eU, Value(buf, sizeof(buf)));
+    for (int i = 0; i < 32; i++) {
+        buf[i] = i;
+    }
+    ASSERT_EQ(0x46dd794eU, Value(buf, sizeof(buf)));
 
-  for (int i = 0; i < 32; i++) {
-    buf[i] = 31 - i;
-  }
-  ASSERT_EQ(0x113fdb5cU, Value(buf, sizeof(buf)));
+    for (int i = 0; i < 32; i++) {
+        buf[i] = 31 - i;
+    }
+    ASSERT_EQ(0x113fdb5cU, Value(buf, sizeof(buf)));
 
-  unsigned char data[48] = {
-    0x01, 0xc0, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x14, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x04, 0x00,
-    0x00, 0x00, 0x00, 0x14,
-    0x00, 0x00, 0x00, 0x18,
-    0x28, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-    0x02, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00,
-  };
-  ASSERT_EQ(0xd9963a56, Value(reinterpret_cast<char*>(data), sizeof(data)));
+    unsigned char data[48] = {
+        0x01, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00,
+        0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x18, 0x28, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    ASSERT_EQ(0xd9963a56, Value(reinterpret_cast<char*>(data), sizeof(data)));
 }
 
-TEST_F(CRC, Values) {
-  ASSERT_NE(Value("a", 1), Value("foo", 3));
-}
+TEST_F(CRC, Values) { ASSERT_NE(Value("a", 1), Value("foo", 3)); }
 
 TEST_F(CRC, Extend) {
-  ASSERT_EQ(Value("hello world", 11),
-            Extend(Value("hello ", 6), "world", 5));
+    ASSERT_EQ(Value("hello world", 11), Extend(Value("hello ", 6), "world", 5));
 }
 
 TEST_F(CRC, Mask) {
-  uint32_t crc = Value("foo", 3);
-  ASSERT_NE(crc, Mask(crc));
-  ASSERT_NE(crc, Mask(Mask(crc)));
-  ASSERT_EQ(crc, Unmask(Mask(crc)));
-  ASSERT_EQ(crc, Unmask(Unmask(Mask(Mask(crc)))));
+    uint32_t crc = Value("foo", 3);
+    ASSERT_NE(crc, Mask(crc));
+    ASSERT_NE(crc, Mask(Mask(crc)));
+    ASSERT_EQ(crc, Unmask(Mask(crc)));
+    ASSERT_EQ(crc, Unmask(Unmask(Mask(Mask(crc)))));
 }
 
 TEST_F(CRC, fast_is_on) {
     std::cout << "IsFastCrc32Supported=" << IsFastCrc32Supported() << std::endl;
 #if defined(__x86_64__)
-    EXPECT_TRUE(IsFastCrc32Supported());
+    EXPECT_EQ(butil::CPU().has_sse42(), IsFastCrc32Supported());
+#if defined(UNIT_TEST)
+    EXPECT_EQ(internal::IsSse42SupportedForTesting(), IsFastCrc32Supported());
+#endif
 #endif
 }
 
