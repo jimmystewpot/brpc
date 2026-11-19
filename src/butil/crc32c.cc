@@ -12,9 +12,12 @@
 
 #include "butil/crc32c.h"
 
-#include <string.h>
 #include <stdint.h>
-#ifdef __SSE4_2__
+#include <string.h>
+#if defined(__x86_64__)
+#include <nmmintrin.h>
+#include <wmmintrin.h>
+#elif defined(__SSE4_2__)
 #include <nmmintrin.h>
 #endif
 #include "butil/build_config.h"
@@ -798,68 +801,280 @@ static bool is_zvbc() {
 
 #endif  // __riscv && __riscv_xlen == 64 && (__riscv_zbc || __riscv_zvbc)
 
-// Detect if SSE4.2 or not.
-#ifdef __SSE4_2__
-static bool isSSE42() {
-#if defined(__GNUC__) && defined(__x86_64__) && !defined(IOS_CROSS_COMPILE)
-  uint32_t c_;
-  uint32_t d_;
-  __asm__("cpuid" : "=c"(c_), "=d"(d_) : "a"(1) : "ebx");
-  return c_ & (1U << 20);  // copied from CpuId.h in Folly.
-#else
-  return false;
-#endif
+#if defined(__x86_64__)
+static inline uint32_t X86CpuidLeaf1Ecx() {
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "0"(1), "2"(0));
+    return ecx;
 }
-#endif
+
+static bool isSSE42() {
+    static const bool supported = (X86CpuidLeaf1Ecx() & (1U << 20)) != 0;
+    return supported;
+}
+
+static bool isPCLMULQDQ() {
+    static const bool supported = (X86CpuidLeaf1Ecx() & (1U << 1)) != 0;
+    return supported;
+}
+
+// Compute the bit-reflected CRC32C shift constant x^(8*bytes - 64) mod P(x)
+// (where 1U is x^31 in reflected representation, yielding x^(8*bytes - 33) mod
+// P(x) to compensate for the 33-bit shift inherent in 32x32 PCLMULQDQ +
+// _mm_crc32_u64 reduction).
+static constexpr uint32_t ComputeCrc32cShiftConst(size_t bytes) {
+    uint32_t crc = 1U;
+    for (size_t i = 0; i < bytes * 8 - 64; ++i) {
+        crc = (crc >> 1) ^ ((crc & 1U) ? 0x82f63b78U : 0U);
+    }
+    return crc;
+}
+static_assert(ComputeCrc32cShiftConst(64) == 0x9e4addf8U,
+              "CRC32C 64B shift constant mismatch");
+
+__attribute__((target("sse4.2"))) static uint32_t X86ExtendCrc32(
+    uint32_t crc, const char* buf, size_t size) {
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(buf);
+    uint64_t l = crc ^ 0xffffffffU;
+
+    if (size >= 8) {
+        if (reinterpret_cast<uintptr_t>(p) & 1U) {
+            l = _mm_crc32_u8(static_cast<uint32_t>(l), *p);
+            ++p;
+            --size;
+        }
+        if (reinterpret_cast<uintptr_t>(p) & 2U) {
+            uint16_t v;
+            memcpy(&v, p, sizeof(v));
+            l = _mm_crc32_u16(static_cast<uint32_t>(l), v);
+            p += 2;
+            size -= 2;
+        }
+        if (reinterpret_cast<uintptr_t>(p) & 4U) {
+            l = _mm_crc32_u32(static_cast<uint32_t>(l),
+                              DecodeFixed32(reinterpret_cast<const char*>(p)));
+            p += 4;
+            size -= 4;
+        }
+    }
+
+    while (size >= 32) {
+        l = _mm_crc32_u64(l, DecodeFixed64(reinterpret_cast<const char*>(p)));
+        l = _mm_crc32_u64(l,
+                          DecodeFixed64(reinterpret_cast<const char*>(p + 8)));
+        l = _mm_crc32_u64(l,
+                          DecodeFixed64(reinterpret_cast<const char*>(p + 16)));
+        l = _mm_crc32_u64(l,
+                          DecodeFixed64(reinterpret_cast<const char*>(p + 24)));
+        p += 32;
+        size -= 32;
+    }
+
+    while (size >= 8) {
+        l = _mm_crc32_u64(l, DecodeFixed64(reinterpret_cast<const char*>(p)));
+        p += 8;
+        size -= 8;
+    }
+
+    if (size & 4U) {
+        l = _mm_crc32_u32(static_cast<uint32_t>(l),
+                          DecodeFixed32(reinterpret_cast<const char*>(p)));
+        p += 4;
+    }
+    if (size & 2U) {
+        uint16_t v;
+        memcpy(&v, p, sizeof(v));
+        l = _mm_crc32_u16(static_cast<uint32_t>(l), v);
+        p += 2;
+    }
+    if (size & 1U) {
+        l = _mm_crc32_u8(static_cast<uint32_t>(l), *p);
+    }
+
+    return static_cast<uint32_t>(l ^ 0xffffffffU);
+}
+
+__attribute__((target("sse4.2,pclmul"))) static uint32_t X86ExtendCrc32Pclmul(
+    uint32_t crc, const char* buf, size_t size) {
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(buf);
+    uint64_t l = crc ^ 0xffffffffU;
+
+    if (size >= 8) {
+        if (reinterpret_cast<uintptr_t>(p) & 1U) {
+            l = _mm_crc32_u8(static_cast<uint32_t>(l), *p);
+            ++p;
+            --size;
+        }
+        if (reinterpret_cast<uintptr_t>(p) & 2U) {
+            uint16_t v;
+            memcpy(&v, p, sizeof(v));
+            l = _mm_crc32_u16(static_cast<uint32_t>(l), v);
+            p += 2;
+            size -= 2;
+        }
+        if (reinterpret_cast<uintptr_t>(p) & 4U) {
+            l = _mm_crc32_u32(static_cast<uint32_t>(l),
+                              DecodeFixed32(reinterpret_cast<const char*>(p)));
+            p += 4;
+            size -= 4;
+        }
+    }
+
+    while (size >= 1008) {
+        uint64_t crc0 = l;
+        uint64_t crc1 = 0;
+        uint64_t crc2 = 0;
+        for (size_t i = 0; i < 42; ++i) {
+            crc0 = _mm_crc32_u64(
+                crc0, DecodeFixed64(reinterpret_cast<const char*>(p + i * 8)));
+            crc1 = _mm_crc32_u64(
+                crc1,
+                DecodeFixed64(reinterpret_cast<const char*>(p + 336 + i * 8)));
+            crc2 = _mm_crc32_u64(
+                crc2,
+                DecodeFixed64(reinterpret_cast<const char*>(p + 672 + i * 8)));
+        }
+        constexpr uint32_t kShift0 = ComputeCrc32cShiftConst(672);
+        constexpr uint32_t kShift1 = ComputeCrc32cShiftConst(336);
+        const __m128i k0 = _mm_cvtsi32_si128(static_cast<int>(kShift0));
+        const __m128i k1 = _mm_cvtsi32_si128(static_cast<int>(kShift1));
+        const __m128i v0 = _mm_cvtsi64_si128(static_cast<int64_t>(crc0));
+        const __m128i v1 = _mm_cvtsi64_si128(static_cast<int64_t>(crc1));
+        const __m128i t0 = _mm_clmulepi64_si128(v0, k0, 0x00);
+        const __m128i t1 = _mm_clmulepi64_si128(v1, k1, 0x00);
+        l = _mm_crc32_u64(0, static_cast<uint64_t>(
+                                 _mm_cvtsi128_si64(_mm_xor_si128(t0, t1)))) ^
+            crc2;
+        p += 1008;
+        size -= 1008;
+    }
+
+    while (size >= 192) {
+        uint64_t crc0 = l;
+        uint64_t crc1 = 0;
+        uint64_t crc2 = 0;
+        for (size_t i = 0; i < 8; ++i) {
+            crc0 = _mm_crc32_u64(
+                crc0, DecodeFixed64(reinterpret_cast<const char*>(p + i * 8)));
+            crc1 = _mm_crc32_u64(
+                crc1,
+                DecodeFixed64(reinterpret_cast<const char*>(p + 64 + i * 8)));
+            crc2 = _mm_crc32_u64(
+                crc2,
+                DecodeFixed64(reinterpret_cast<const char*>(p + 128 + i * 8)));
+        }
+        constexpr uint32_t kShift0 = ComputeCrc32cShiftConst(128);
+        constexpr uint32_t kShift1 = ComputeCrc32cShiftConst(64);
+        const __m128i k0 = _mm_cvtsi32_si128(static_cast<int>(kShift0));
+        const __m128i k1 = _mm_cvtsi32_si128(static_cast<int>(kShift1));
+        const __m128i v0 = _mm_cvtsi64_si128(static_cast<int64_t>(crc0));
+        const __m128i v1 = _mm_cvtsi64_si128(static_cast<int64_t>(crc1));
+        const __m128i t0 = _mm_clmulepi64_si128(v0, k0, 0x00);
+        const __m128i t1 = _mm_clmulepi64_si128(v1, k1, 0x00);
+        l = _mm_crc32_u64(0, static_cast<uint64_t>(
+                                 _mm_cvtsi128_si64(_mm_xor_si128(t0, t1)))) ^
+            crc2;
+        p += 192;
+        size -= 192;
+    }
+
+    while (size >= 32) {
+        l = _mm_crc32_u64(l, DecodeFixed64(reinterpret_cast<const char*>(p)));
+        l = _mm_crc32_u64(l,
+                          DecodeFixed64(reinterpret_cast<const char*>(p + 8)));
+        l = _mm_crc32_u64(l,
+                          DecodeFixed64(reinterpret_cast<const char*>(p + 16)));
+        l = _mm_crc32_u64(l,
+                          DecodeFixed64(reinterpret_cast<const char*>(p + 24)));
+        p += 32;
+        size -= 32;
+    }
+
+    while (size >= 8) {
+        l = _mm_crc32_u64(l, DecodeFixed64(reinterpret_cast<const char*>(p)));
+        p += 8;
+        size -= 8;
+    }
+
+    if (size & 4U) {
+        l = _mm_crc32_u32(static_cast<uint32_t>(l),
+                          DecodeFixed32(reinterpret_cast<const char*>(p)));
+        p += 4;
+    }
+    if (size & 2U) {
+        uint16_t v;
+        memcpy(&v, p, sizeof(v));
+        l = _mm_crc32_u16(static_cast<uint32_t>(l), v);
+        p += 2;
+    }
+    if (size & 1U) {
+        l = _mm_crc32_u8(static_cast<uint32_t>(l), *p);
+    }
+
+    return static_cast<uint32_t>(l ^ 0xffffffffU);
+}
+#endif  // defined(__x86_64__)
 
 typedef uint32_t (*Function)(uint32_t, const char*, size_t);
 
-#if defined(__riscv) && (__riscv_xlen == 64) && defined(__riscv_zbc) && defined(__riscv_zvbc)
+#if defined(__riscv) && (__riscv_xlen == 64) && defined(__riscv_zbc) && \
+    defined(__riscv_zvbc)
 // Both Zbc and Zvbc: scalar is cheaper for small inputs, the vector fold
 // wins from ~256 B on.
 static constexpr size_t kRiscvVclmulThresholdBytes = 256;
 static uint32_t RiscvExtend(uint32_t crc, const char* buf, size_t size) {
-  return (size >= kRiscvVclmulThresholdBytes ? rv_crc32c_vclmul : rv_crc32c_clmul)(crc, buf, size);
+    return (size >= kRiscvVclmulThresholdBytes
+                ? rv_crc32c_vclmul
+                : rv_crc32c_clmul)(crc, buf, size);
 }
 #endif
 
 static inline Function Choose_Extend() {
-#ifdef __SSE4_2__
-  if (isSSE42()) {
-    return (Function)ExtendImpl<FastCRC32Functor>;
-  }
+#if defined(__x86_64__)
+    if (isSSE42()) {
+        if (isPCLMULQDQ()) {
+            return &X86ExtendCrc32Pclmul;
+        }
+        return &X86ExtendCrc32;
+    }
 #endif
-#if defined(__riscv) && (__riscv_xlen == 64) && (defined(__riscv_zbc) || defined(__riscv_zvbc))
+#if defined(__riscv) && (__riscv_xlen == 64) && \
+    (defined(__riscv_zbc) || defined(__riscv_zvbc))
 #if defined(__riscv_zbc) && defined(__riscv_zvbc)
-  {
-    static const bool has_zbc = is_zbc();
-    static const bool has_zvbc = is_zvbc();
-    if (has_zbc && has_zvbc) {
-      return (Function)RiscvExtend;
+    {
+        static const bool has_zbc = is_zbc();
+        static const bool has_zvbc = is_zvbc();
+        if (has_zbc && has_zvbc) {
+            return (Function)RiscvExtend;
+        }
+        if (has_zvbc) {
+            return (Function)rv_crc32c_vclmul;
+        }
+        if (has_zbc) {
+            return (Function)rv_crc32c_clmul;
+        }
     }
-    if (has_zvbc) {
-      return (Function)rv_crc32c_vclmul;
-    }
-    if (has_zbc) {
-      return (Function)rv_crc32c_clmul;
-    }
-  }
 #elif defined(__riscv_zvbc)
-  if (is_zvbc()) {
-    return (Function)rv_crc32c_vclmul;
-  }
+    if (is_zvbc()) {
+        return (Function)rv_crc32c_vclmul;
+    }
 #elif defined(__riscv_zbc)
-  if (is_zbc()) {
-    return (Function)rv_crc32c_clmul;
-  }
+    if (is_zbc()) {
+        return (Function)rv_crc32c_clmul;
+    }
 #endif
 #endif
-  return (Function)ExtendImpl<SlowCRC32Functor>;
+    return (Function)ExtendImpl<SlowCRC32Functor>;
 }
 
 bool IsFastCrc32Supported() {
-#ifdef __SSE4_2__
-  if (isSSE42()) return true;
+#if defined(__x86_64__)
+    if (isSSE42()) return true;
 #endif
 #if defined(__riscv) && (__riscv_xlen == 64) && (defined(__riscv_zbc) || defined(__riscv_zvbc))
 #if defined(__riscv_zvbc)
@@ -876,6 +1091,41 @@ uint32_t Extend(uint32_t crc, const char* buf, size_t size) {
   static Function ChosenExtend = Choose_Extend();
   return ChosenExtend(crc, buf, size);
 }
+
+#if defined(UNIT_TEST)
+namespace internal {
+
+uint32_t ExtendSlowForTesting(uint32_t crc, const char* buf, size_t size) {
+    return ExtendImpl<SlowCRC32Functor>(crc, buf, size);
+}
+
+#if defined(__x86_64__)
+bool IsSse42SupportedForTesting() {
+    return isSSE42();
+}
+
+bool IsPclmulqdqSupportedForTesting() {
+    return isSSE42() && isPCLMULQDQ();
+}
+
+uint32_t ExtendSse42ForTesting(uint32_t crc, const char* buf, size_t size) {
+    if (!IsSse42SupportedForTesting()) {
+        return ExtendImpl<SlowCRC32Functor>(crc, buf, size);
+    }
+    return X86ExtendCrc32(crc, buf, size);
+}
+
+uint32_t ExtendSse42PclmulForTesting(uint32_t crc, const char* buf,
+                                     size_t size) {
+    if (!IsPclmulqdqSupportedForTesting()) {
+        return ExtendImpl<SlowCRC32Functor>(crc, buf, size);
+    }
+    return X86ExtendCrc32Pclmul(crc, buf, size);
+}
+#endif  // defined(__x86_64__)
+
+}  // namespace internal
+#endif  // defined(UNIT_TEST)
 
 }  // namespace crc32c
 }  // namespace butil
