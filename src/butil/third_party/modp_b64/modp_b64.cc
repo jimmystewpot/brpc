@@ -49,7 +49,7 @@
  * If you are ripping this out of the library, comment out the next
  * line and uncomment the next lines as approrpiate
  */
-//#include "config.h"
+// #include "config.h"
 
 /* if on motoral, sun, ibm; uncomment this */
 /* #define WORDS_BIGENDIAN 1 */
@@ -167,24 +167,24 @@ static size_t modp_b64_encode_scalar_tail(uint8_t* p, const char* str, size_t i,
     }
 
     switch (len - i) {
-    case 0:
-        break;
-    case 1:
-        t1 = static_cast<uint8_t>(str[i]);
-        *p++ = static_cast<uint8_t>(e0[t1]);
-        *p++ = static_cast<uint8_t>(e1[(t1 & 0x03) << 4]);
-        *p++ = CHARPAD;
-        *p++ = CHARPAD;
-        break;
-    default: /* case 2 */
-        t1 = static_cast<uint8_t>(str[i]);
-        t2 = static_cast<uint8_t>(str[i + 1]);
-        *p++ = static_cast<uint8_t>(e0[t1]);
-        *p++ =
-            static_cast<uint8_t>(e1[((t1 & 0x03) << 4) | ((t2 >> 4) & 0x0F)]);
-        *p++ = static_cast<uint8_t>(e2[(t2 & 0x0F) << 2]);
-        *p++ = CHARPAD;
-        break;
+        case 0:
+            break;
+        case 1:
+            t1 = static_cast<uint8_t>(str[i]);
+            *p++ = static_cast<uint8_t>(e0[t1]);
+            *p++ = static_cast<uint8_t>(e1[(t1 & 0x03) << 4]);
+            *p++ = CHARPAD;
+            *p++ = CHARPAD;
+            break;
+        default: /* case 2 */
+            t1 = static_cast<uint8_t>(str[i]);
+            t2 = static_cast<uint8_t>(str[i + 1]);
+            *p++ = static_cast<uint8_t>(e0[t1]);
+            *p++ = static_cast<uint8_t>(
+                e1[((t1 & 0x03) << 4) | ((t2 >> 4) & 0x0F)]);
+            *p++ = static_cast<uint8_t>(e2[(t2 & 0x0F) << 2]);
+            *p++ = CHARPAD;
+            break;
     }
 
     *p = '\0';
@@ -216,8 +216,8 @@ __attribute__((target("ssse3"))) static size_t modp_b64_encode_ssse3(
             65, 71, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -19, -16, 0, 0);
 
         while (len - i >= 16) {
-            __m128i in =
-                _mm_loadu_si128(reinterpret_cast<const __m128i*>(str + i));
+            __m128i in = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                static_cast<const void*>(str + i)));
             __m128i shuffled = _mm_shuffle_epi8(in, shuf);
             __m128i t0 = _mm_and_si128(shuffled, mask0);
             __m128i t1 = _mm_mulhi_epu16(t0, mul0);
@@ -231,7 +231,8 @@ __attribute__((target("ssse3"))) static size_t modp_b64_encode_ssse3(
             __m128i ascii =
                 _mm_add_epi8(indices, _mm_shuffle_epi8(offset_lut, lut_idx));
 
-            _mm_storeu_si128(reinterpret_cast<__m128i*>(p), ascii);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(static_cast<void*>(p)),
+                             ascii);
             i += 12;
             p += 16;
         }
@@ -261,10 +262,10 @@ __attribute__((target("avx2"))) static size_t modp_b64_encode_avx2(
             71, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -19, -16, 0, 0);
 
         while (len - i >= 28) {
-            __m128i lo =
-                _mm_loadu_si128(reinterpret_cast<const __m128i*>(str + i));
-            __m128i hi =
-                _mm_loadu_si128(reinterpret_cast<const __m128i*>(str + i + 12));
+            __m128i lo = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                static_cast<const void*>(str + i)));
+            __m128i hi = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                static_cast<const void*>(str + i + 12)));
             __m256i in =
                 _mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1);
 
@@ -281,7 +282,8 @@ __attribute__((target("avx2"))) static size_t modp_b64_encode_avx2(
             __m256i ascii = _mm256_add_epi8(
                 indices, _mm256_shuffle_epi8(offset_lut, lut_idx));
 
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(p), ascii);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(static_cast<void*>(p)), ascii);
             i += 24;
             p += 32;
         }
@@ -292,7 +294,8 @@ __attribute__((target("avx2"))) static size_t modp_b64_encode_avx2(
             _mm_setr_epi8(1, 0, 2, 1, 4, 3, 5, 4, 7, 6, 8, 7, 10, 9, 11, 10);
         const __m128i offset_lut = _mm_setr_epi8(
             65, 71, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -19, -16, 0, 0);
-        __m128i in = _mm_loadu_si128(reinterpret_cast<const __m128i*>(str + i));
+        __m128i in = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            static_cast<const void*>(str + i)));
         __m128i shuffled = _mm_shuffle_epi8(in, shuf);
         __m128i t0 = _mm_and_si128(shuffled, _mm_set1_epi32(0x0FC0FC00));
         __m128i t1 = _mm_mulhi_epu16(t0, _mm_set1_epi32(0x04000040));
@@ -306,7 +309,8 @@ __attribute__((target("avx2"))) static size_t modp_b64_encode_avx2(
         __m128i ascii =
             _mm_add_epi8(indices, _mm_shuffle_epi8(offset_lut, lut_idx));
 
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(p), ascii);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(static_cast<void*>(p)),
+                         ascii);
         i += 12;
         p += 16;
     }
@@ -330,9 +334,8 @@ size_t modp_b64_encode(char* dest, const char* str, size_t len) {
 #endif
 }
 
-#ifdef WORDS_BIGENDIAN   /* BIG ENDIAN -- SUN / IBM / MOTOROLA */
-int modp_b64_decode(char* dest, const char* src, int len)
-{
+#ifdef WORDS_BIGENDIAN /* BIG ENDIAN -- SUN / IBM / MOTOROLA */
+int modp_b64_decode(char* dest, const char* src, int len) {
     if (len == 0) return 0;
 
 #ifdef DOPAD
@@ -340,28 +343,28 @@ int modp_b64_decode(char* dest, const char* src, int len)
        4 chars and be a multiple of 4.
        there can be at most 2 pad chars at the end */
     if (len < 4 || (len % 4 != 0)) return MODP_B64_ERROR;
-    if (src[len-1] == CHARPAD) {
+    if (src[len - 1] == CHARPAD) {
         len--;
-        if (src[len -1] == CHARPAD) {
+        if (src[len - 1] == CHARPAD) {
             len--;
         }
     }
-#endif  /* DOPAD */
+#endif /* DOPAD */
 
     size_t i;
     int leftover = len % 4;
-    size_t chunks = (leftover == 0) ? len / 4 - 1 : len /4;
+    size_t chunks = (leftover == 0) ? len / 4 - 1 : len / 4;
 
-    uint8_t* p = (uint8_t*) dest;
+    uint8_t* p = (uint8_t*)dest;
     uint32_t x = 0;
-    uint32_t* destInt = (uint32_t*) p;
-    uint32_t* srcInt = (uint32_t*) src;
+    uint32_t* destInt = (uint32_t*)p;
+    uint32_t* srcInt = (uint32_t*)src;
     uint32_t y = *srcInt++;
     for (i = 0; i < chunks; ++i) {
-        x = d0[y >> 24 & 0xff] | d1[y >> 16 & 0xff] |
-            d2[y >> 8 & 0xff] | d3[y & 0xff];
+        x = d0[y >> 24 & 0xff] | d1[y >> 16 & 0xff] | d2[y >> 8 & 0xff] |
+            d3[y & 0xff];
 
-        if (x >= BADCHAR)  return MODP_B64_ERROR;
+        if (x >= BADCHAR) return MODP_B64_ERROR;
         *destInt = x << 8;
         p += 3;
         destInt = (uint32_t*)p;
@@ -369,32 +372,32 @@ int modp_b64_decode(char* dest, const char* src, int len)
     }
 
     switch (leftover) {
-    case 0:
-        x = d0[y >> 24 & 0xff] | d1[y >> 16 & 0xff] |
-            d2[y >>  8 & 0xff] | d3[y & 0xff];
-        if (x >= BADCHAR)  return MODP_B64_ERROR;
-        *p++ = ((uint8_t*)&x)[1];
-        *p++ = ((uint8_t*)&x)[2];
-        *p = ((uint8_t*)&x)[3];
-        return (chunks+1)*3;
-    case 1:
-        x = d3[y >> 24];
-        *p =  (uint8_t)x;
-        break;
-    case 2:
-        x = d3[y >> 24] *64 + d3[(y >> 16) & 0xff];
-        *p =  (uint8_t)(x >> 4);
-        break;
-    default:  /* case 3 */
-        x = (d3[y >> 24] *64 + d3[(y >> 16) & 0xff])*64 +
-            d3[(y >> 8) & 0xff];
-        *p++ = (uint8_t) (x >> 10);
-        *p = (uint8_t) (x >> 2);
-        break;
+        case 0:
+            x = d0[y >> 24 & 0xff] | d1[y >> 16 & 0xff] | d2[y >> 8 & 0xff] |
+                d3[y & 0xff];
+            if (x >= BADCHAR) return MODP_B64_ERROR;
+            *p++ = ((uint8_t*)&x)[1];
+            *p++ = ((uint8_t*)&x)[2];
+            *p = ((uint8_t*)&x)[3];
+            return (chunks + 1) * 3;
+        case 1:
+            x = d3[y >> 24];
+            *p = (uint8_t)x;
+            break;
+        case 2:
+            x = d3[y >> 24] * 64 + d3[(y >> 16) & 0xff];
+            *p = (uint8_t)(x >> 4);
+            break;
+        default: /* case 3 */
+            x = (d3[y >> 24] * 64 + d3[(y >> 16) & 0xff]) * 64 +
+                d3[(y >> 8) & 0xff];
+            *p++ = (uint8_t)(x >> 10);
+            *p = (uint8_t)(x >> 2);
+            break;
     }
 
     if (x >= BADCHAR) return MODP_B64_ERROR;
-    return 3*chunks + (6*leftover)/8;
+    return 3 * chunks + (6 * leftover) / 8;
 }
 
 #else /* LITTLE  ENDIAN -- INTEL AND FRIENDS */
@@ -402,51 +405,51 @@ int modp_b64_decode(char* dest, const char* src, int len)
 static size_t modp_b64_decode_scalar_tail(uint8_t* p, const uint8_t* s,
                                           size_t rem,
                                           const uint8_t* dest_start) {
-    size_t i;
-    int leftover = static_cast<int>(rem % 4);
-    size_t chunks = (leftover == 0) ? (rem / 4 - 1) : (rem / 4);
     const size_t prefix_bytes = static_cast<size_t>(p - dest_start);
+    if (rem == 0) {
+        return prefix_bytes;
+    }
+    const size_t leftover = rem % 4;
+    const size_t chunks = (leftover == 0) ? (rem / 4 - 1) : (rem / 4);
 
     uint32_t x = 0;
     uint32_t y = 0;
-    for (i = 0; i < chunks; ++i) {
+    for (size_t i = 0; i < chunks; ++i) {
         memcpy(&y, s, 4);
         s += 4;
         x = d0[y & 0xff] | d1[(y >> 8) & 0xff] | d2[(y >> 16) & 0xff] |
             d3[(y >> 24) & 0xff];
 
         if (x >= BADCHAR) return MODP_B64_ERROR;
-        memcpy(p, &x, 4);
+        memcpy(p, &x, 3);
         p += 3;
     }
 
     switch (leftover) {
-    case 0:
-        memcpy(&y, s, 4);
-        x = d0[y & 0xff] | d1[(y >> 8) & 0xff] | d2[(y >> 16) & 0xff] |
-            d3[(y >> 24) & 0xff];
+        case 0:
+            memcpy(&y, s, 4);
+            x = d0[y & 0xff] | d1[(y >> 8) & 0xff] | d2[(y >> 16) & 0xff] |
+                d3[(y >> 24) & 0xff];
 
-        if (x >= BADCHAR) return MODP_B64_ERROR;
-        *p++ = reinterpret_cast<uint8_t*>(&x)[0];
-        *p++ = reinterpret_cast<uint8_t*>(&x)[1];
-        *p = reinterpret_cast<uint8_t*>(&x)[2];
-        return prefix_bytes + (chunks + 1) * 3;
-    case 1: /* with padding this is an impossible case */
-        x = d0[s[0]];
-        *p = *reinterpret_cast<uint8_t*>(&x);
-        break;
-    case 2: /* case 2, 1 output byte */
-        x = d0[s[0]] | d1[s[1]];
-        *p = *reinterpret_cast<uint8_t*>(&x);
-        break;
-    default: /* case 3, 2 output bytes */
-        x = d0[s[0]] | d1[s[1]] | d2[s[2]];
-        *p++ = reinterpret_cast<uint8_t*>(&x)[0];
-        *p = reinterpret_cast<uint8_t*>(&x)[1];
-        break;
+            if (x >= BADCHAR) return MODP_B64_ERROR;
+            *p++ = reinterpret_cast<uint8_t*>(&x)[0];
+            *p++ = reinterpret_cast<uint8_t*>(&x)[1];
+            *p = reinterpret_cast<uint8_t*>(&x)[2];
+            return prefix_bytes + (chunks + 1) * 3;
+        case 1: /* 1-char final Base64 quantum is never valid */
+            return MODP_B64_ERROR;
+        case 2: /* case 2, 1 output byte */
+            x = d0[s[0]] | d1[s[1]];
+            if (x >= BADCHAR) return MODP_B64_ERROR;
+            *p = *reinterpret_cast<uint8_t*>(&x);
+            break;
+        default: /* case 3, 2 output bytes */
+            x = d0[s[0]] | d1[s[1]] | d2[s[2]];
+            if (x >= BADCHAR) return MODP_B64_ERROR;
+            *p++ = reinterpret_cast<uint8_t*>(&x)[0];
+            *p = reinterpret_cast<uint8_t*>(&x)[1];
+            break;
     }
-
-    if (x >= BADCHAR) return MODP_B64_ERROR;
 
     return prefix_bytes + 3 * chunks + (6 * leftover) / 8;
 }
@@ -506,8 +509,8 @@ __attribute__((target("ssse3"))) static size_t modp_b64_decode_ssse3(
                                                 13, 12, -1, -1, -1, -1);
 
         while (rem >= 20) {
-            __m128i input =
-                _mm_loadu_si128(reinterpret_cast<const __m128i*>(s));
+            __m128i input = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(static_cast<const void*>(s)));
             __m128i lo_nibbles = _mm_and_si128(input, mask_0f);
             __m128i hi_nibbles =
                 _mm_and_si128(_mm_srli_epi32(input, 4), mask_0f);
@@ -528,7 +531,8 @@ __attribute__((target("ssse3"))) static size_t modp_b64_decode_ssse3(
                 _mm_maddubs_epi16(sextets, merge_ab_cd), merge_abcd);
             __m128i packed12 = _mm_shuffle_epi8(merged, pack_shuf);
 
-            _mm_storel_epi64(reinterpret_cast<__m128i*>(p), packed12);
+            _mm_storel_epi64(reinterpret_cast<__m128i*>(static_cast<void*>(p)),
+                             packed12);
             uint32_t tail4 = static_cast<uint32_t>(
                 _mm_cvtsi128_si32(_mm_srli_si128(packed12, 8)));
             memcpy(p + 8, &tail4, 4);
@@ -582,8 +586,8 @@ __attribute__((target("avx2"))) static size_t modp_b64_decode_avx2(
             5, 4, 10, 9, 8, 14, 13, 12, -1, -1, -1, -1);
 
         while (rem >= 36) {
-            __m256i input =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(s));
+            __m256i input = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(static_cast<const void*>(s)));
             __m256i lo_nibbles = _mm256_and_si256(input, mask_0f);
             __m256i hi_nibbles =
                 _mm256_and_si256(_mm256_srli_epi32(input, 4), mask_0f);
@@ -606,12 +610,14 @@ __attribute__((target("avx2"))) static size_t modp_b64_decode_avx2(
             __m128i lo12 = _mm256_castsi256_si128(packed);
             __m128i hi12 = _mm256_extracti128_si256(packed, 1);
 
-            _mm_storel_epi64(reinterpret_cast<__m128i*>(p), lo12);
+            _mm_storel_epi64(reinterpret_cast<__m128i*>(static_cast<void*>(p)),
+                             lo12);
             uint32_t lo_tail4 = static_cast<uint32_t>(
                 _mm_cvtsi128_si32(_mm_srli_si128(lo12, 8)));
             memcpy(p + 8, &lo_tail4, 4);
 
-            _mm_storel_epi64(reinterpret_cast<__m128i*>(p + 12), hi12);
+            _mm_storel_epi64(
+                reinterpret_cast<__m128i*>(static_cast<void*>(p + 12)), hi12);
             uint32_t hi_tail4 = static_cast<uint32_t>(
                 _mm_cvtsi128_si32(_mm_srli_si128(hi12, 8)));
             memcpy(p + 20, &hi_tail4, 4);
@@ -635,7 +641,8 @@ __attribute__((target("avx2"))) static size_t modp_b64_decode_avx2(
         const __m128i pack_shuf = _mm_setr_epi8(2, 1, 0, 6, 5, 4, 10, 9, 8, 14,
                                                 13, 12, -1, -1, -1, -1);
 
-        __m128i input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(s));
+        __m128i input = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(static_cast<const void*>(s)));
         __m128i lo_nibbles = _mm_and_si128(input, mask_0f);
         __m128i hi_nibbles = _mm_and_si128(_mm_srli_epi32(input, 4), mask_0f);
         __m128i lo = _mm_shuffle_epi8(lut_lo, lo_nibbles);
@@ -656,7 +663,8 @@ __attribute__((target("avx2"))) static size_t modp_b64_decode_avx2(
             _mm_set1_epi32(0x00011000));
         __m128i packed12 = _mm_shuffle_epi8(merged, pack_shuf);
 
-        _mm_storel_epi64(reinterpret_cast<__m128i*>(p), packed12);
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(static_cast<void*>(p)),
+                         packed12);
         uint32_t tail4 = static_cast<uint32_t>(
             _mm_cvtsi128_si32(_mm_srli_si128(packed12, 8)));
         memcpy(p + 8, &tail4, 4);
@@ -737,4 +745,4 @@ size_t modp_b64_decode_avx2_for_testing(char* dest, const char* src,
 }  // extern "C"
 #endif  // defined(UNIT_TEST) && defined(__x86_64__)
 
-#endif  /* if bigendian / else / endif */
+#endif /* if bigendian / else / endif */

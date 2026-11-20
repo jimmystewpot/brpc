@@ -51,6 +51,17 @@ TEST(Base64Test, Basic) {
     ok = Base64Decode(encoded, &decoded);
     EXPECT_TRUE(ok);
     EXPECT_EQ(kText, decoded);
+
+    std::string inplace = kText;
+    EXPECT_EQ(modp_b64_encode(inplace), kBase64Text);
+    EXPECT_EQ(modp_b64_decode(inplace), kText);
+
+    std::string empty_inplace;
+    EXPECT_EQ(modp_b64_encode(empty_inplace), "");
+    EXPECT_EQ(modp_b64_decode(empty_inplace), "");
+
+    std::string invalid_inplace = "====";
+    EXPECT_EQ(modp_b64_decode(invalid_inplace), "");
 }
 
 TEST(Base64Test, RejectsMalformedPaddingAndLengths) {
@@ -79,9 +90,70 @@ std::vector<uint8_t> MakeDeterministicBytes(size_t len) {
     return buf;
 }
 
+class GuardedPagePair {
+   public:
+    GuardedPagePair() = default;
+    ~GuardedPagePair() { Reset(); }
+    GuardedPagePair(const GuardedPagePair&) = delete;
+    GuardedPagePair& operator=(const GuardedPagePair&) = delete;
+
+    bool Init() {
+        Reset();
+        const long page_size_long = sysconf(_SC_PAGESIZE);
+        page_size_ = page_size_long > 0 ? static_cast<size_t>(page_size_long)
+                                        : static_cast<size_t>(4096);
+        void* mapping = mmap(nullptr, 2 * page_size_, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapping == MAP_FAILED) {
+            return false;
+        }
+        uint8_t* base = static_cast<uint8_t*>(mapping);
+        if (mprotect(base + page_size_, page_size_, PROT_NONE) != 0) {
+            munmap(mapping, 2 * page_size_);
+            return false;
+        }
+        mapping_ = mapping;
+        rw_page_ = base;
+        return true;
+    }
+
+    uint8_t* rw_end() const { return rw_page_ + page_size_; }
+
+   private:
+    void Reset() {
+        if (mapping_ != nullptr) {
+            munmap(mapping_, 2 * page_size_);
+            mapping_ = nullptr;
+            rw_page_ = nullptr;
+        }
+    }
+
+    void* mapping_ = nullptr;
+    uint8_t* rw_page_ = nullptr;
+    size_t page_size_ = 0;
+};
+
 }  // namespace
 
 TEST(Base64Test, DifferentialAllTiersSizesAndAlignments) {
+    auto verify_canaries = [](const std::vector<char>& storage, size_t align,
+                              size_t written_len, uint8_t fill, const char* tag,
+                              size_t len) {
+        const char expected = static_cast<char>(fill);
+        for (size_t i = 0; i < align; ++i) {
+            if (storage[i] != expected) {
+                FAIL() << tag << " pre-canary clobbered len=" << len
+                       << " align=" << align << " idx=" << i;
+            }
+        }
+        for (size_t i = align + written_len; i < storage.size(); ++i) {
+            if (storage[i] != expected) {
+                FAIL() << tag << " post-canary clobbered len=" << len
+                       << " align=" << align << " idx=" << i;
+            }
+        }
+    };
+
     std::vector<size_t> sizes;
     for (size_t s = 0; s <= 1024; ++s) {
         sizes.push_back(s);
@@ -116,78 +188,99 @@ TEST(Base64Test, DifferentialAllTiersSizesAndAlignments) {
             if (len > 0) {
                 memcpy(src_ptr, raw.data(), len);
             }
+            memset(enc_disp_storage.data(), 0x5A, enc_disp_storage.size());
             char* enc_disp = enc_disp_storage.data() + align;
-            memset(enc_disp, 0x5A, enc_alloc);
 
             size_t enc_len = modp_b64_encode(enc_disp, src_ptr, len);
             ASSERT_EQ(enc_len, modp_b64_encode_strlen(len))
                 << "len=" << len << " align=" << align;
             ASSERT_EQ(enc_disp[enc_len], '\0')
                 << "len=" << len << " align=" << align;
+            ASSERT_NO_FATAL_FAILURE(verify_canaries(
+                enc_disp_storage, align, enc_len + 1, 0x5A, "enc_disp", len));
 
+            memset(dec_disp_storage.data(), 0xA5, dec_disp_storage.size());
             char* dec_disp = dec_disp_storage.data() + align;
-            memset(dec_disp, 0xA5, dec_alloc);
             size_t dec_len = modp_b64_decode(dec_disp, enc_disp, enc_len);
             ASSERT_EQ(dec_len, len) << "len=" << len << " align=" << align;
             if (len > 0) {
                 ASSERT_EQ(memcmp(dec_disp, raw.data(), len), 0)
                     << "len=" << len << " align=" << align;
             }
+            ASSERT_NO_FATAL_FAILURE(verify_canaries(
+                dec_disp_storage, align, len, 0xA5, "dec_disp", len));
 
 #if defined(UNIT_TEST) && defined(__x86_64__)
+            memset(enc_scalar_storage.data(), 0x5A, enc_scalar_storage.size());
             char* enc_scalar = enc_scalar_storage.data() + align;
-            memset(enc_scalar, 0x5A, enc_alloc);
             size_t enc_scalar_len =
                 modp_b64_encode_scalar_for_testing(enc_scalar, src_ptr, len);
             ASSERT_EQ(enc_scalar_len, enc_len);
             ASSERT_EQ(enc_scalar[enc_scalar_len], '\0');
             ASSERT_EQ(memcmp(enc_scalar, enc_disp, enc_len + 1), 0);
+            ASSERT_NO_FATAL_FAILURE(verify_canaries(enc_scalar_storage, align,
+                                                    enc_len + 1, 0x5A,
+                                                    "enc_scalar", len));
 
+            memset(dec_scalar_storage.data(), 0xA5, dec_scalar_storage.size());
             char* dec_scalar = dec_scalar_storage.data() + align;
-            memset(dec_scalar, 0xA5, dec_alloc);
             size_t dec_scalar_len = modp_b64_decode_scalar_for_testing(
                 dec_scalar, enc_scalar, enc_scalar_len);
             ASSERT_EQ(dec_scalar_len, len);
             if (len > 0) {
                 ASSERT_EQ(memcmp(dec_scalar, raw.data(), len), 0);
             }
+            ASSERT_NO_FATAL_FAILURE(verify_canaries(
+                dec_scalar_storage, align, len, 0xA5, "dec_scalar", len));
 
             if (has_ssse3) {
+                memset(enc_ssse3_storage.data(), 0x5A,
+                       enc_ssse3_storage.size());
                 char* enc_ssse3 = enc_ssse3_storage.data() + align;
-                memset(enc_ssse3, 0x5A, enc_alloc);
                 size_t enc_ssse3_len =
                     modp_b64_encode_ssse3_for_testing(enc_ssse3, src_ptr, len);
                 ASSERT_EQ(enc_ssse3_len, enc_len);
                 ASSERT_EQ(enc_ssse3[enc_ssse3_len], '\0');
                 ASSERT_EQ(memcmp(enc_ssse3, enc_scalar, enc_len + 1), 0);
+                ASSERT_NO_FATAL_FAILURE(
+                    verify_canaries(enc_ssse3_storage, align, enc_len + 1, 0x5A,
+                                    "enc_ssse3", len));
 
+                memset(dec_ssse3_storage.data(), 0xA5,
+                       dec_ssse3_storage.size());
                 char* dec_ssse3 = dec_ssse3_storage.data() + align;
-                memset(dec_ssse3, 0xA5, dec_alloc);
                 size_t dec_ssse3_len = modp_b64_decode_ssse3_for_testing(
                     dec_ssse3, enc_scalar, enc_scalar_len);
                 ASSERT_EQ(dec_ssse3_len, len);
                 if (len > 0) {
                     ASSERT_EQ(memcmp(dec_ssse3, raw.data(), len), 0);
                 }
+                ASSERT_NO_FATAL_FAILURE(verify_canaries(
+                    dec_ssse3_storage, align, len, 0xA5, "dec_ssse3", len));
             }
 
             if (has_avx2) {
+                memset(enc_avx2_storage.data(), 0x5A, enc_avx2_storage.size());
                 char* enc_avx2 = enc_avx2_storage.data() + align;
-                memset(enc_avx2, 0x5A, enc_alloc);
                 size_t enc_avx2_len =
                     modp_b64_encode_avx2_for_testing(enc_avx2, src_ptr, len);
                 ASSERT_EQ(enc_avx2_len, enc_len);
                 ASSERT_EQ(enc_avx2[enc_avx2_len], '\0');
                 ASSERT_EQ(memcmp(enc_avx2, enc_scalar, enc_len + 1), 0);
+                ASSERT_NO_FATAL_FAILURE(verify_canaries(enc_avx2_storage, align,
+                                                        enc_len + 1, 0x5A,
+                                                        "enc_avx2", len));
 
+                memset(dec_avx2_storage.data(), 0xA5, dec_avx2_storage.size());
                 char* dec_avx2 = dec_avx2_storage.data() + align;
-                memset(dec_avx2, 0xA5, dec_alloc);
                 size_t dec_avx2_len = modp_b64_decode_avx2_for_testing(
                     dec_avx2, enc_scalar, enc_scalar_len);
                 ASSERT_EQ(dec_avx2_len, len);
                 if (len > 0) {
                     ASSERT_EQ(memcmp(dec_avx2, raw.data(), len), 0);
                 }
+                ASSERT_NO_FATAL_FAILURE(verify_canaries(
+                    dec_avx2_storage, align, len, 0xA5, "dec_avx2", len));
             }
 #endif
         }
@@ -207,31 +300,10 @@ TEST(Base64Test, DifferentialAllTiersSizesAndAlignments) {
 }
 
 TEST(Base64Test, GuardPageAndExactBufferBoundsAllTiers) {
-    const long page_size_long = sysconf(_SC_PAGESIZE);
-    const size_t page_size =
-        page_size_long > 0 ? static_cast<size_t>(page_size_long) : 4096;
-
-    auto alloc_two_pages = [&](uint8_t** rw_page_out) -> void* {
-        void* mapping = mmap(nullptr, 2 * page_size, PROT_READ | PROT_WRITE,
-                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (mapping == MAP_FAILED) {
-            return MAP_FAILED;
-        }
-        uint8_t* base = static_cast<uint8_t*>(mapping);
-        if (mprotect(base + page_size, page_size, PROT_NONE) != 0) {
-            munmap(mapping, 2 * page_size);
-            return MAP_FAILED;
-        }
-        *rw_page_out = base;
-        return mapping;
-    };
-
-    uint8_t* src_page = nullptr;
-    uint8_t* dst_page = nullptr;
-    void* src_map = alloc_two_pages(&src_page);
-    void* dst_map = alloc_two_pages(&dst_page);
-    ASSERT_NE(src_map, MAP_FAILED);
-    ASSERT_NE(dst_map, MAP_FAILED);
+    GuardedPagePair src_guard;
+    GuardedPagePair dst_guard;
+    ASSERT_TRUE(src_guard.Init());
+    ASSERT_TRUE(dst_guard.Init());
 
 #if defined(UNIT_TEST) && defined(__x86_64__)
     const bool has_ssse3 = modp_b64_x86_has_ssse3_for_testing();
@@ -241,12 +313,12 @@ TEST(Base64Test, GuardPageAndExactBufferBoundsAllTiers) {
     for (size_t len = 0; len <= 128; ++len) {
         std::vector<uint8_t> raw = MakeDeterministicBytes(len);
         const size_t enc_buf_len = modp_b64_encode_len(len);
-        char* guarded_raw = reinterpret_cast<char*>(src_page + page_size - len);
+        char* guarded_raw = reinterpret_cast<char*>(src_guard.rw_end() - len);
         if (len > 0) {
             memcpy(guarded_raw, raw.data(), len);
         }
         char* guarded_enc =
-            reinterpret_cast<char*>(dst_page + page_size - enc_buf_len);
+            reinterpret_cast<char*>(dst_guard.rw_end() - enc_buf_len);
 
         // Test dispatched encode at exact page boundary.
         memset(guarded_enc, 0x7F, enc_buf_len);
@@ -282,16 +354,16 @@ TEST(Base64Test, GuardPageAndExactBufferBoundsAllTiers) {
         }
 #endif
 
-        // Test decode with strict (enc_len / 4 * 3) output buffer at exact
+        // Test decode with strict exact output buffer (len bytes) at exact
         // guard page boundary (NOT modp_b64_decode_len which adds +2 slack).
-        const size_t strict_dec_alloc = (enc_len / 4) * 3;
+        const size_t strict_dec_alloc = len;
         char* guarded_b64_src =
-            reinterpret_cast<char*>(src_page + page_size - enc_len);
+            reinterpret_cast<char*>(src_guard.rw_end() - enc_len);
         if (enc_len > 0) {
             memcpy(guarded_b64_src, expected_enc.data(), enc_len);
         }
         char* guarded_dec_dst =
-            reinterpret_cast<char*>(dst_page + page_size - strict_dec_alloc);
+            reinterpret_cast<char*>(dst_guard.rw_end() - strict_dec_alloc);
 
         memset(guarded_dec_dst, 0x33, strict_dec_alloc);
         size_t dec_len =
@@ -329,9 +401,91 @@ TEST(Base64Test, GuardPageAndExactBufferBoundsAllTiers) {
         }
 #endif
     }
+}
 
-    munmap(src_map, 2 * page_size);
-    munmap(dst_map, 2 * page_size);
+TEST(Base64Test, RejectsInvalidTrailingQuantumWithoutClobberingDest) {
+    auto check_canary = [](const char* input, size_t enc_len, size_t canary_len,
+                           size_t (*decode_fn)(char*, const char*, size_t),
+                           const char* tier) {
+        std::vector<char> out(canary_len, 0x5A);
+        EXPECT_EQ(decode_fn(out.data(), input, enc_len), MODP_B64_ERROR)
+            << tier << " input=" << input;
+        for (size_t i = 0; i < canary_len; ++i) {
+            EXPECT_EQ(static_cast<unsigned char>(out[i]), 0x5Au)
+                << tier << " input=" << input << " byte=" << i;
+        }
+    };
+
+#if defined(UNIT_TEST) && defined(__x86_64__)
+    const bool has_ssse3 = modp_b64_x86_has_ssse3_for_testing();
+    const bool has_avx2 = modp_b64_x86_has_avx2_for_testing();
+#endif
+
+    // 1-byte canary buffer for "====" (enc_len = 4, 0 valid bytes).
+    check_canary("====", 4, 1, &modp_b64_decode, "dispatched");
+#if defined(UNIT_TEST) && defined(__x86_64__)
+    check_canary("====", 4, 1, &modp_b64_decode_scalar_for_testing, "scalar");
+    if (has_ssse3) {
+        check_canary("====", 4, 1, &modp_b64_decode_ssse3_for_testing, "ssse3");
+    }
+    if (has_avx2) {
+        check_canary("====", 4, 1, &modp_b64_decode_avx2_for_testing, "avx2");
+    }
+#endif
+
+    // 2-byte canary buffer for 4-char invalid trailing quanta across all tiers.
+    for (const char* input : {"A===", "A!==", "AA!="}) {
+        check_canary(input, 4, 2, &modp_b64_decode, "dispatched");
+#if defined(UNIT_TEST) && defined(__x86_64__)
+        check_canary(input, 4, 2, &modp_b64_decode_scalar_for_testing,
+                     "scalar");
+        if (has_ssse3) {
+            check_canary(input, 4, 2, &modp_b64_decode_ssse3_for_testing,
+                         "ssse3");
+        }
+        if (has_avx2) {
+            check_canary(input, 4, 2, &modp_b64_decode_avx2_for_testing,
+                         "avx2");
+        }
+#endif
+    }
+
+    // Guard-page test: 3 valid prefix bytes ("AAA") followed by invalid 2nd
+    // quantum with only 3 writable bytes before the PROT_NONE guard page.
+    GuardedPagePair src_guard;
+    GuardedPagePair dst_guard;
+    ASSERT_TRUE(src_guard.Init());
+    ASSERT_TRUE(dst_guard.Init());
+
+    auto check_guarded_3bytes = [&](const char* input,
+                                    size_t (*decode_fn)(char*, const char*,
+                                                        size_t),
+                                    const char* tier) {
+        const size_t enc_len = 8;
+        char* guarded_src =
+            reinterpret_cast<char*>(src_guard.rw_end() - enc_len);
+        memcpy(guarded_src, input, enc_len);
+        char* guarded_dst = reinterpret_cast<char*>(dst_guard.rw_end() - 3);
+        memset(guarded_dst, 0x5A, 3);
+        EXPECT_EQ(decode_fn(guarded_dst, guarded_src, enc_len), MODP_B64_ERROR)
+            << tier << " input=" << input;
+    };
+
+    for (const char* input : {"QUFB====", "QUFB!A=="}) {
+        check_guarded_3bytes(input, &modp_b64_decode, "dispatched");
+#if defined(UNIT_TEST) && defined(__x86_64__)
+        check_guarded_3bytes(input, &modp_b64_decode_scalar_for_testing,
+                             "scalar");
+        if (has_ssse3) {
+            check_guarded_3bytes(input, &modp_b64_decode_ssse3_for_testing,
+                                 "ssse3");
+        }
+        if (has_avx2) {
+            check_guarded_3bytes(input, &modp_b64_decode_avx2_for_testing,
+                                 "avx2");
+        }
+#endif
+    }
 }
 
 TEST(Base64Test, ExhaustiveInvalidByteAtEveryPositionAllTiers) {
@@ -435,9 +589,11 @@ TEST(Base64Test, BenchmarkAllTiersThroughput) {
         }
         auto t2 = std::chrono::steady_clock::now();
         double enc_ns =
-            std::chrono::duration<double, std::nano>(t1 - t0).count() / iters;
+            std::chrono::duration<double, std::nano>(t1 - t0).count() /
+            static_cast<double>(iters);
         double dec_ns =
-            std::chrono::duration<double, std::nano>(t2 - t1).count() / iters;
+            std::chrono::duration<double, std::nano>(t2 - t1).count() /
+            static_cast<double>(iters);
         printf(
             "[Base64 Bench Dispatched] size=%5zu B | encode=%8.2f ns | "
             "decode=%8.2f ns (sink=%zu)\n",
@@ -456,9 +612,11 @@ TEST(Base64Test, BenchmarkAllTiersThroughput) {
         }
         auto ts2 = std::chrono::steady_clock::now();
         double enc_s_ns =
-            std::chrono::duration<double, std::nano>(ts1 - ts0).count() / iters;
+            std::chrono::duration<double, std::nano>(ts1 - ts0).count() /
+            static_cast<double>(iters);
         double dec_s_ns =
-            std::chrono::duration<double, std::nano>(ts2 - ts1).count() / iters;
+            std::chrono::duration<double, std::nano>(ts2 - ts1).count() /
+            static_cast<double>(iters);
         printf(
             "[Base64 Bench Scalar    ] size=%5zu B | encode=%8.2f ns | "
             "decode=%8.2f ns\n",
@@ -478,10 +636,10 @@ TEST(Base64Test, BenchmarkAllTiersThroughput) {
             auto tss2 = std::chrono::steady_clock::now();
             double enc_ss_ns =
                 std::chrono::duration<double, std::nano>(tss1 - tss0).count() /
-                iters;
+                static_cast<double>(iters);
             double dec_ss_ns =
                 std::chrono::duration<double, std::nano>(tss2 - tss1).count() /
-                iters;
+                static_cast<double>(iters);
             printf(
                 "[Base64 Bench SSSE3     ] size=%5zu B | encode=%8.2f ns | "
                 "decode=%8.2f ns\n",
@@ -502,10 +660,10 @@ TEST(Base64Test, BenchmarkAllTiersThroughput) {
             auto ta2 = std::chrono::steady_clock::now();
             double enc_a_ns =
                 std::chrono::duration<double, std::nano>(ta1 - ta0).count() /
-                iters;
+                static_cast<double>(iters);
             double dec_a_ns =
                 std::chrono::duration<double, std::nano>(ta2 - ta1).count() /
-                iters;
+                static_cast<double>(iters);
             printf(
                 "[Base64 Bench AVX2      ] size=%5zu B | encode=%8.2f ns | "
                 "decode=%8.2f ns\n",
