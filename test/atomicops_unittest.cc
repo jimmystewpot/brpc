@@ -352,6 +352,125 @@ static void TestAcquireReleaseCompareAndSwap() {
     EXPECT_EQ(k_max_val, prev);
 }
 
+template <class AtomicType>
+static void RunCrossPlatformReferenceSemantics(const AtomicType* inputs,
+                                               size_t num_inputs) {
+    using UnsignedType = typename std::make_unsigned<AtomicType>::type;
+    volatile AtomicType actual = 0;
+    AtomicType expected = 0;
+
+    for (size_t i = 0; i < num_inputs; ++i) {
+        const AtomicType v = inputs[i];
+        const AtomicType neg_v =
+            static_cast<AtomicType>(0U - static_cast<UnsignedType>(v));
+        const AtomicType next = inputs[(i + 1) % num_inputs];
+
+        // NoBarrier_Store / NoBarrier_Load
+        butil::subtle::NoBarrier_Store(&actual, v);
+        expected = v;
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        // Acquire_Store / Acquire_Load
+        butil::subtle::Acquire_Store(&actual, neg_v);
+        expected = neg_v;
+        EXPECT_EQ(expected, butil::subtle::Acquire_Load(&actual));
+
+        // Release_Store / Release_Load
+        butil::subtle::Release_Store(&actual, v);
+        expected = v;
+        EXPECT_EQ(expected, butil::subtle::Release_Load(&actual));
+
+        // NoBarrier_AtomicIncrement (wrapping unsigned semantics)
+        expected = static_cast<AtomicType>(static_cast<UnsignedType>(expected) +
+                                           static_cast<UnsignedType>(v));
+        EXPECT_EQ(expected,
+                  butil::subtle::NoBarrier_AtomicIncrement(&actual, v));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        // Barrier_AtomicIncrement (wrapping unsigned semantics)
+        expected = static_cast<AtomicType>(static_cast<UnsignedType>(expected) +
+                                           static_cast<UnsignedType>(neg_v));
+        EXPECT_EQ(expected,
+                  butil::subtle::Barrier_AtomicIncrement(&actual, neg_v));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        // NoBarrier_AtomicExchange
+        const AtomicType prev_exch = expected;
+        expected = next;
+        EXPECT_EQ(prev_exch,
+                  butil::subtle::NoBarrier_AtomicExchange(&actual, next));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        // NoBarrier_CompareAndSwap (miss then hit)
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_CompareAndSwap(
+                                &actual, expected ^ 1, v));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_CompareAndSwap(
+                                &actual, expected, v));
+        expected = v;
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        // Acquire_CompareAndSwap (miss then hit)
+        EXPECT_EQ(expected, butil::subtle::Acquire_CompareAndSwap(
+                                &actual, expected ^ 1, neg_v));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+        EXPECT_EQ(expected, butil::subtle::Acquire_CompareAndSwap(
+                                &actual, expected, neg_v));
+        expected = neg_v;
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        // Release_CompareAndSwap (miss then hit)
+        EXPECT_EQ(expected, butil::subtle::Release_CompareAndSwap(
+                                &actual, expected ^ 1, next));
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+        EXPECT_EQ(expected, butil::subtle::Release_CompareAndSwap(
+                                &actual, expected, next));
+        expected = next;
+        EXPECT_EQ(expected, butil::subtle::NoBarrier_Load(&actual));
+
+        butil::subtle::MemoryBarrier();
+    }
+}
+
+TEST(AtomicOpsTest, CrossPlatformReferenceSemantics) {
+    const butil::subtle::Atomic32 kInputs32[] = {
+        0,
+        1,
+        -1,
+        2,
+        -2,
+        127,
+        -128,
+        32767,
+        -32768,
+        0x12345678,
+        -0x12345678,
+        0x7ffffffe,
+        0x7fffffff,
+        -0x7fffffff,
+        static_cast<butil::subtle::Atomic32>(0x80000000U)};
+    RunCrossPlatformReferenceSemantics(
+        kInputs32, sizeof(kInputs32) / sizeof(kInputs32[0]));
+
+#if defined(ARCH_CPU_64_BITS)
+    const butil::subtle::Atomic64 kInputs64[] = {
+        0,
+        1,
+        -1,
+        0x7fffffff,
+        -0x80000000LL,
+        0x100000000LL,
+        -0x100000000LL,
+        0x123456789abcdef0LL,
+        -0x123456789abcdef0LL,
+        0x7ffffffffffffffeLL,
+        0x7fffffffffffffffLL,
+        static_cast<butil::subtle::Atomic64>(0x8000000000000000ULL)};
+    RunCrossPlatformReferenceSemantics(
+        kInputs64, sizeof(kInputs64) / sizeof(kInputs64[0]));
+#endif
+}
+
 #if defined(__x86_64__)
 namespace legacy_x86_asm {
 

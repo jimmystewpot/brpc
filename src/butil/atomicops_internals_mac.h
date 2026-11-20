@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file is an internal atomic implementation, use butil/atomicops.h instead.
+// This file is an internal atomic implementation, use butil/atomicops.h
+// instead.
 
 #ifndef BUTIL_ATOMICOPS_INTERNALS_MAC_H_
 #define BUTIL_ATOMICOPS_INTERNALS_MAC_H_
-
-#include <libkern/OSAtomic.h>
 
 namespace butil {
 namespace subtle {
@@ -15,88 +14,66 @@ namespace subtle {
 inline Atomic32 NoBarrier_CompareAndSwap(volatile Atomic32* ptr,
                                          Atomic32 old_value,
                                          Atomic32 new_value) {
-  Atomic32 prev_value;
-  do {
-    if (OSAtomicCompareAndSwap32(old_value, new_value,
-                                 const_cast<Atomic32*>(ptr))) {
-      return old_value;
-    }
-    prev_value = *ptr;
-  } while (prev_value == old_value);
-  return prev_value;
+    __atomic_compare_exchange_n(ptr, &old_value, new_value, false,
+                                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    return old_value;
 }
 
 inline Atomic32 NoBarrier_AtomicExchange(volatile Atomic32* ptr,
                                          Atomic32 new_value) {
-  Atomic32 old_value;
-  do {
-    old_value = *ptr;
-  } while (!OSAtomicCompareAndSwap32(old_value, new_value,
-                                     const_cast<Atomic32*>(ptr)));
-  return old_value;
+    return __atomic_exchange_n(ptr, new_value, __ATOMIC_RELAXED);
 }
 
 inline Atomic32 NoBarrier_AtomicIncrement(volatile Atomic32* ptr,
                                           Atomic32 increment) {
-  return OSAtomicAdd32(increment, const_cast<Atomic32*>(ptr));
+    return __atomic_add_fetch(ptr, increment, __ATOMIC_RELAXED);
 }
 
 inline Atomic32 Barrier_AtomicIncrement(volatile Atomic32* ptr,
                                         Atomic32 increment) {
-  return OSAtomicAdd32Barrier(increment, const_cast<Atomic32*>(ptr));
+    return __atomic_add_fetch(ptr, increment, __ATOMIC_SEQ_CST);
 }
 
-inline void MemoryBarrier() {
-  OSMemoryBarrier();
-}
+inline void MemoryBarrier() { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
 
 inline Atomic32 Acquire_CompareAndSwap(volatile Atomic32* ptr,
-                                       Atomic32 old_value,
-                                       Atomic32 new_value) {
-  Atomic32 prev_value;
-  do {
-    if (OSAtomicCompareAndSwap32Barrier(old_value, new_value,
-                                        const_cast<Atomic32*>(ptr))) {
-      return old_value;
-    }
-    prev_value = *ptr;
-  } while (prev_value == old_value);
-  return prev_value;
+                                       Atomic32 old_value, Atomic32 new_value) {
+    __atomic_compare_exchange_n(ptr, &old_value, new_value, false,
+                                __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE);
+    return old_value;
 }
 
 inline Atomic32 Release_CompareAndSwap(volatile Atomic32* ptr,
-                                       Atomic32 old_value,
-                                       Atomic32 new_value) {
-  return Acquire_CompareAndSwap(ptr, old_value, new_value);
+                                       Atomic32 old_value, Atomic32 new_value) {
+    __atomic_compare_exchange_n(ptr, &old_value, new_value, false,
+                                __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    return old_value;
 }
 
 inline void NoBarrier_Store(volatile Atomic32* ptr, Atomic32 value) {
-  *ptr = value;
+    __atomic_store_n(ptr, value, __ATOMIC_RELAXED);
 }
 
 inline void Acquire_Store(volatile Atomic32* ptr, Atomic32 value) {
-  *ptr = value;
-  MemoryBarrier();
+    __atomic_store_n(ptr, value, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
 
 inline void Release_Store(volatile Atomic32* ptr, Atomic32 value) {
-  MemoryBarrier();
-  *ptr = value;
+    __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
 }
 
 inline Atomic32 NoBarrier_Load(volatile const Atomic32* ptr) {
-  return *ptr;
+    return __atomic_load_n(ptr, __ATOMIC_RELAXED);
 }
 
 inline Atomic32 Acquire_Load(volatile const Atomic32* ptr) {
-  Atomic32 value = *ptr;
-  MemoryBarrier();
-  return value;
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
 }
 
 inline Atomic32 Release_Load(volatile const Atomic32* ptr) {
-  MemoryBarrier();
-  return *ptr;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    return __atomic_load_n(ptr, __ATOMIC_RELAXED);
 }
 
 #ifdef __LP64__
@@ -106,92 +83,69 @@ inline Atomic32 Release_Load(volatile const Atomic32* ptr) {
 inline Atomic64 NoBarrier_CompareAndSwap(volatile Atomic64* ptr,
                                          Atomic64 old_value,
                                          Atomic64 new_value) {
-  Atomic64 prev_value;
-  do {
-    if (OSAtomicCompareAndSwap64(old_value, new_value,
-                                 reinterpret_cast<volatile int64_t*>(ptr))) {
-      return old_value;
-    }
-    prev_value = *ptr;
-  } while (prev_value == old_value);
-  return prev_value;
+    __atomic_compare_exchange_n(ptr, &old_value, new_value, false,
+                                __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+    return old_value;
 }
 
 inline Atomic64 NoBarrier_AtomicExchange(volatile Atomic64* ptr,
                                          Atomic64 new_value) {
-  Atomic64 old_value;
-  do {
-    old_value = *ptr;
-  } while (!OSAtomicCompareAndSwap64(old_value, new_value,
-                                     reinterpret_cast<volatile int64_t*>(ptr)));
-  return old_value;
+    return __atomic_exchange_n(ptr, new_value, __ATOMIC_RELAXED);
 }
 
 inline Atomic64 NoBarrier_AtomicIncrement(volatile Atomic64* ptr,
                                           Atomic64 increment) {
-  return OSAtomicAdd64(increment, reinterpret_cast<volatile int64_t*>(ptr));
+    return __atomic_add_fetch(ptr, increment, __ATOMIC_RELAXED);
 }
 
 inline Atomic64 Barrier_AtomicIncrement(volatile Atomic64* ptr,
                                         Atomic64 increment) {
-  return OSAtomicAdd64Barrier(increment,
-                              reinterpret_cast<volatile int64_t*>(ptr));
+    return __atomic_add_fetch(ptr, increment, __ATOMIC_SEQ_CST);
 }
 
 inline Atomic64 Acquire_CompareAndSwap(volatile Atomic64* ptr,
-                                       Atomic64 old_value,
-                                       Atomic64 new_value) {
-  Atomic64 prev_value;
-  do {
-    if (OSAtomicCompareAndSwap64Barrier(
-        old_value, new_value, reinterpret_cast<volatile int64_t*>(ptr))) {
-      return old_value;
-    }
-    prev_value = *ptr;
-  } while (prev_value == old_value);
-  return prev_value;
+                                       Atomic64 old_value, Atomic64 new_value) {
+    __atomic_compare_exchange_n(ptr, &old_value, new_value, false,
+                                __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE);
+    return old_value;
 }
 
 inline Atomic64 Release_CompareAndSwap(volatile Atomic64* ptr,
-                                       Atomic64 old_value,
-                                       Atomic64 new_value) {
-  // The lib kern interface does not distinguish between
-  // Acquire and Release memory barriers; they are equivalent.
-  return Acquire_CompareAndSwap(ptr, old_value, new_value);
+                                       Atomic64 old_value, Atomic64 new_value) {
+    __atomic_compare_exchange_n(ptr, &old_value, new_value, false,
+                                __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    return old_value;
 }
 
 inline void NoBarrier_Store(volatile Atomic64* ptr, Atomic64 value) {
-  *ptr = value;
+    __atomic_store_n(ptr, value, __ATOMIC_RELAXED);
 }
 
 inline void Acquire_Store(volatile Atomic64* ptr, Atomic64 value) {
-  *ptr = value;
-  MemoryBarrier();
+    __atomic_store_n(ptr, value, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
 }
 
 inline void Release_Store(volatile Atomic64* ptr, Atomic64 value) {
-  MemoryBarrier();
-  *ptr = value;
+    __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
 }
 
 inline Atomic64 NoBarrier_Load(volatile const Atomic64* ptr) {
-  return *ptr;
+    return __atomic_load_n(ptr, __ATOMIC_RELAXED);
 }
 
 inline Atomic64 Acquire_Load(volatile const Atomic64* ptr) {
-  Atomic64 value = *ptr;
-  MemoryBarrier();
-  return value;
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
 }
 
 inline Atomic64 Release_Load(volatile const Atomic64* ptr) {
-  MemoryBarrier();
-  return *ptr;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    return __atomic_load_n(ptr, __ATOMIC_RELAXED);
 }
 
 #endif  // defined(__LP64__)
 
-}   // namespace butil::subtle
-}   // namespace butil
+}  // namespace subtle
+}  // namespace butil
 
 #endif  // BUTIL_ATOMICOPS_INTERNALS_MAC_H_
