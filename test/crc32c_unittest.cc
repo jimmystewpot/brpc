@@ -49,12 +49,12 @@ TEST_F(CRC, StandardResults) {
     ASSERT_EQ(0x62a8ab43U, Value(buf, sizeof(buf)));
 
     for (int i = 0; i < 32; i++) {
-        buf[i] = i;
+        buf[i] = static_cast<char>(i);
     }
     ASSERT_EQ(0x46dd794eU, Value(buf, sizeof(buf)));
 
     for (int i = 0; i < 32; i++) {
-        buf[i] = 31 - i;
+        buf[i] = static_cast<char>(31 - i);
     }
     ASSERT_EQ(0x113fdb5cU, Value(buf, sizeof(buf)));
 
@@ -219,6 +219,48 @@ TEST_F(CRC, GuardPageBoundaryNoOverRead) {
     }
 
     ASSERT_EQ(0, munmap(mapping, alloc_size));
+}
+
+TEST_F(CRC, ZeroLengthNullptrAndTightCanaryBounds) {
+    const uint32_t kSeed = 0x9e3779b9U;
+    EXPECT_EQ(kSeed, Extend(kSeed, nullptr, 0));
+    EXPECT_EQ(kSeed, internal::ExtendSlowForTesting(kSeed, nullptr, 0));
+#if defined(__x86_64__)
+    EXPECT_EQ(kSeed, internal::ExtendSse42ForTesting(kSeed, nullptr, 0));
+    EXPECT_EQ(kSeed, internal::ExtendSse42PclmulForTesting(kSeed, nullptr, 0));
+#endif
+
+    // Tight heap-allocated buffers across sizes above all SIMD thresholds
+    // (1..256, 384, 1008, 1024, 2048) and misaligned offsets 0..15.
+    const size_t kTestSizes[] = {1,   2,   3,   4,   7,    8,    15,   16,
+                                 17,  31,  32,  33,  63,   64,   65,   191,
+                                 192, 193, 256, 384, 1007, 1008, 1009, 2048};
+    for (size_t len : kTestSizes) {
+        for (size_t offset = 0; offset < 16; ++offset) {
+            std::vector<uint8_t> tight(offset + len);
+            for (size_t i = 0; i < offset; ++i) {
+                tight[i] = 0xAAU;
+            }
+            for (size_t i = 0; i < len; ++i) {
+                tight[offset + i] =
+                    static_cast<uint8_t>((i * 73U + 19U) & 0xFFU);
+            }
+            const char* ptr =
+                reinterpret_cast<const char*>(tight.data() + offset);
+            const uint32_t expected =
+                internal::ExtendSlowForTesting(kSeed, ptr, len);
+            EXPECT_EQ(expected, Extend(kSeed, ptr, len));
+#if defined(__x86_64__)
+            EXPECT_EQ(expected,
+                      internal::ExtendSse42ForTesting(kSeed, ptr, len));
+            EXPECT_EQ(expected,
+                      internal::ExtendSse42PclmulForTesting(kSeed, ptr, len));
+#endif
+            for (size_t i = 0; i < offset; ++i) {
+                ASSERT_EQ(0xAAU, tight[i]);
+            }
+        }
+    }
 }
 
 TEST_F(CRC, BenchmarkAllTiersThroughput) {

@@ -38,12 +38,6 @@ ifeq ($(SYSTEM),Darwin)
     SOEXT = dylib
 endif
 
-#required by butil/crc32.cc to boost performance for 10x
-ifeq ($(shell test $(GCC_VERSION) -ge 40400; echo $$?),0)
-  ifeq ($(shell uname -p),i386)  #note: i386 is processor family type, not the 32-bit x86 arch
-    CXXFLAGS+=-msse4 -msse4.2
-  endif
-endif
 # RISC-V specific optimizations
 ifeq ($(shell uname -m),riscv64)
   CXXFLAGS+=-march=rv64gc

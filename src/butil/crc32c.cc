@@ -325,14 +325,6 @@ static inline uint32_t LE_LOAD32(const uint8_t *p) {
   return DecodeFixed32(reinterpret_cast<const char*>(p));
 }
 
-#ifdef __SSE4_2__
-#ifdef __LP64__
-static inline uint64_t LE_LOAD64(const uint8_t *p) {
-  return DecodeFixed64(reinterpret_cast<const char*>(p));
-}
-#endif
-#endif
-
 static inline void Slow_CRC32(uint64_t* l, uint8_t const **p) {
   uint32_t c = static_cast<uint32_t>(*l ^ LE_LOAD32(*p));
   *p += 4;
@@ -349,29 +341,6 @@ static inline void Slow_CRC32(uint64_t* l, uint8_t const **p) {
   table0_[c >> 24];
 }
 
-static inline void Fast_CRC32(uint64_t* l, uint8_t const **p) {
-#ifdef __SSE4_2__
-#ifdef __LP64__
-  *l = _mm_crc32_u64(*l, LE_LOAD64(*p));
-  *p += 8;
-#else
-  *l = _mm_crc32_u32(static_cast<unsigned int>(*l), LE_LOAD32(*p));
-  *p += 4;
-  *l = _mm_crc32_u32(static_cast<unsigned int>(*l), LE_LOAD32(*p));
-  *p += 4;
-#endif
-#else
-  Slow_CRC32(l, p);
-#endif
-}
-
-class FastCRC32Functor {
-public:
-  inline void operator()(uint64_t* l, uint8_t const **p) const {
-    return Fast_CRC32(l , p);
-  }
-};
-
 class SlowCRC32Functor {
 public:
   inline void operator()(uint64_t* l, uint8_t const **p) const {
@@ -379,49 +348,55 @@ public:
   }
 };
 
-template<typename CRC32Functor>
+template <typename CRC32Functor>
 uint32_t ExtendImpl(uint32_t crc, const char* buf, size_t size) {
-  CRC32Functor CRC32;
+    if (size == 0) {
+        return crc;
+    }
+    CRC32Functor CRC32;
 
-  const uint8_t *p = reinterpret_cast<const uint8_t *>(buf);
-  const uint8_t *e = p + size;
-  uint64_t l = crc ^ 0xffffffffu;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(buf);
+    const uint8_t* e = p + size;
+    uint64_t l = crc ^ 0xffffffffu;
 
 // Align n to (1 << m) byte boundary
-#define ALIGN(n, m)     ((n + ((1 << m) - 1)) & ~((1 << m) - 1))
+#define ALIGN(n, m)                                       \
+    (((n) + ((static_cast<uintptr_t>(1U) << (m)) - 1U)) & \
+     ~((static_cast<uintptr_t>(1U) << (m)) - 1U))
 
-#define STEP1 do {                              \
-    int c = (l & 0xff) ^ *p++;                  \
-    l = table0_[c] ^ (l >> 8);                  \
-} while (0)
+#define STEP1                                                               \
+    do {                                                                    \
+        const uint32_t c =                                                  \
+            static_cast<uint32_t>(l & 0xffU) ^ static_cast<uint32_t>(*p++); \
+        l = table0_[c] ^ (l >> 8);                                          \
+    } while (0)
 
-
-  // Point x at first 16-byte aligned byte in string.  This might be
-  // just past the end of the string.
-  const uintptr_t pval = reinterpret_cast<uintptr_t>(p);
-  const uint8_t* x = reinterpret_cast<const uint8_t*>(ALIGN(pval, 4));
-  if (x <= e) {
-    // Process bytes until finished or p is 16-byte aligned
-    while (p != x) {
-      STEP1;
+    // Point x at first 16-byte aligned byte in string.  This might be
+    // just past the end of the string.
+    const uintptr_t pval = reinterpret_cast<uintptr_t>(p);
+    const uint8_t* x = reinterpret_cast<const uint8_t*>(ALIGN(pval, 4));
+    if (x <= e) {
+        // Process bytes until finished or p is 16-byte aligned
+        while (p != x) {
+            STEP1;
+        }
     }
-  }
-  // Process bytes 16 at a time
-  while ((e-p) >= 16) {
-    CRC32(&l, &p);
-    CRC32(&l, &p);
-  }
-  // Process bytes 8 at a time
-  while ((e-p) >= 8) {
-    CRC32(&l, &p);
-  }
-  // Process the last few bytes
-  while (p != e) {
-    STEP1;
-  }
+    // Process bytes 16 at a time
+    while ((e - p) >= 16) {
+        CRC32(&l, &p);
+        CRC32(&l, &p);
+    }
+    // Process bytes 8 at a time
+    while ((e - p) >= 8) {
+        CRC32(&l, &p);
+    }
+    // Process the last few bytes
+    while (p != e) {
+        STEP1;
+    }
 #undef STEP1
 #undef ALIGN
-  return static_cast<uint32_t>(l ^ 0xffffffffu);
+    return static_cast<uint32_t>(l ^ 0xffffffffu);
 }
 
 #if defined(__riscv) && (__riscv_xlen == 64) && (defined(__riscv_zbc) || defined(__riscv_zvbc))
