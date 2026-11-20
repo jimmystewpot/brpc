@@ -191,6 +191,24 @@ TEST(CPU, SyntheticCpuidFeatureVectors) {
     EXPECT_EQ(old_cpuid & kExtFeatureFastAvx512, 0);
 }
 
+#if defined(UNIT_TEST)
+TEST(CPU, ExtendedCpuidLeafUnsignedComparison) {
+    // When CPUID(0x80000000) is unsupported, CPUs/VMs may return 0 or the
+    // highest basic leaf (e.g. 7 or 0x1f). Unsigned comparison in
+    // [0x80000000U, 0x8000ffffU] must reject these values rather than treating
+    // static_cast<int>(0x80000004U) as negative.
+    EXPECT_FALSE(butil::internal::HasExtendedCpuLeaf(0U, 0x80000004U));
+    EXPECT_FALSE(butil::internal::HasExtendedCpuLeaf(7U, 0x80000004U));
+    EXPECT_FALSE(butil::internal::HasExtendedCpuLeaf(0x7fffffffU, 0x80000004U));
+    EXPECT_FALSE(butil::internal::HasExtendedCpuLeaf(0x80000000U, 0x80000004U));
+    EXPECT_FALSE(butil::internal::HasExtendedCpuLeaf(0x80000003U, 0x80000004U));
+    EXPECT_TRUE(butil::internal::HasExtendedCpuLeaf(0x80000004U, 0x80000004U));
+    EXPECT_FALSE(butil::internal::HasExtendedCpuLeaf(0x80000004U, 0x80000007U));
+    EXPECT_TRUE(butil::internal::HasExtendedCpuLeaf(0x80000007U, 0x80000007U));
+    EXPECT_TRUE(butil::internal::HasExtendedCpuLeaf(0x80000008U, 0x80000007U));
+}
+#endif  // defined(UNIT_TEST)
+
 // Tests whether we can run extended instructions represented by the CPU
 // information. This test actually executes some extended instructions (such as
 // MMX, SSE, etc.) supported by the CPU and sees we can run them without
@@ -203,114 +221,114 @@ TEST(CPU, RunExtendedInstructions) {
 
 // TODO(jschuh): crbug.com/168866 Find a way to enable this on Win64.
 #if defined(OS_WIN) && !defined(_M_X64)
-  ASSERT_TRUE(cpu.has_mmx());
+    ASSERT_TRUE(cpu.has_mmx());
 
-  // Execute an MMX instruction.
-  __asm emms;
+    // Execute an MMX instruction.
+    __asm emms;
 
-  if (cpu.has_sse()) {
-    // Execute an SSE instruction.
-    __asm xorps xmm0, xmm0;
-  }
+    if (cpu.has_sse()) {
+        // Execute an SSE instruction.
+        __asm xorps xmm0, xmm0;
+    }
 
-  if (cpu.has_sse2()) {
-    // Execute an SSE 2 instruction.
-    __asm psrldq xmm0, 0;
-  }
+    if (cpu.has_sse2()) {
+        // Execute an SSE 2 instruction.
+        __asm psrldq xmm0, 0;
+    }
 
-  if (cpu.has_sse3()) {
-    // Execute an SSE 3 instruction.
-    __asm addsubpd xmm0, xmm0;
-  }
+    if (cpu.has_sse3()) {
+        // Execute an SSE 3 instruction.
+        __asm addsubpd xmm0, xmm0;
+    }
 
-  if (cpu.has_ssse3()) {
-    // Execute a Supplimental SSE 3 instruction.
-    __asm psignb xmm0, xmm0;
-  }
+    if (cpu.has_ssse3()) {
+        // Execute a Supplimental SSE 3 instruction.
+        __asm psignb xmm0, xmm0;
+    }
 
-  if (cpu.has_sse41()) {
-    // Execute an SSE 4.1 instruction.
-    __asm pmuldq xmm0, xmm0;
-  }
+    if (cpu.has_sse41()) {
+        // Execute an SSE 4.1 instruction.
+        __asm pmuldq xmm0, xmm0;
+    }
 
-  if (cpu.has_sse42()) {
-    // Execute an SSE 4.2 instruction.
-    __asm crc32 eax, eax;
-  }
+    if (cpu.has_sse42()) {
+        // Execute an SSE 4.2 instruction.
+        __asm crc32 eax, eax;
+    }
 #elif defined(OS_POSIX) && defined(__x86_64__)
-  ASSERT_TRUE(cpu.has_mmx());
+    ASSERT_TRUE(cpu.has_mmx());
 
-  // Execute an MMX instruction.
-  __asm__ __volatile__("emms\n" : : : "mm0");
+    // Execute an MMX instruction.
+    __asm__ __volatile__("emms\n" : : : "mm0");
 
-  if (cpu.has_sse()) {
-    // Execute an SSE instruction.
-    __asm__ __volatile__("xorps %%xmm0, %%xmm0\n" : : : "xmm0");
-  }
+    if (cpu.has_sse()) {
+        // Execute an SSE instruction.
+        __asm__ __volatile__("xorps %%xmm0, %%xmm0\n" : : : "xmm0");
+    }
 
-  if (cpu.has_sse2()) {
-    // Execute an SSE 2 instruction.
-    __asm__ __volatile__("psrldq $0, %%xmm0\n" : : : "xmm0");
-  }
+    if (cpu.has_sse2()) {
+        // Execute an SSE 2 instruction.
+        __asm__ __volatile__("psrldq $0, %%xmm0\n" : : : "xmm0");
+    }
 
-  if (cpu.has_sse3()) {
-    // Execute an SSE 3 instruction.
-    __asm__ __volatile__("addsubpd %%xmm0, %%xmm0\n" : : : "xmm0");
-  }
+    if (cpu.has_sse3()) {
+        // Execute an SSE 3 instruction.
+        __asm__ __volatile__("addsubpd %%xmm0, %%xmm0\n" : : : "xmm0");
+    }
 
-  // NOTE(gejun): Not work in gcc 3.4
+    // NOTE(gejun): Not work in gcc 3.4
 #if !defined(COMPILER_GCC) || __GNUC__ >= 4
-  if (cpu.has_ssse3()) {
-    // Execute a Supplimental SSE 3 instruction.
-    __asm__ __volatile__("psignb %%xmm0, %%xmm0\n" : : : "xmm0");
-  }
+    if (cpu.has_ssse3()) {
+        // Execute a Supplimental SSE 3 instruction.
+        __asm__ __volatile__("psignb %%xmm0, %%xmm0\n" : : : "xmm0");
+    }
 
-  if (cpu.has_sse41()) {
-    // Execute an SSE 4.1 instruction.
-    __asm__ __volatile__("pmuldq %%xmm0, %%xmm0\n" : : : "xmm0");
-  }
+    if (cpu.has_sse41()) {
+        // Execute an SSE 4.1 instruction.
+        __asm__ __volatile__("pmuldq %%xmm0, %%xmm0\n" : : : "xmm0");
+    }
 
-  if (cpu.has_sse42()) {
-    // Execute an SSE 4.2 instruction.
-    __asm__ __volatile__("crc32 %%eax, %%eax\n" : : : "eax");
-  }
+    if (cpu.has_sse42()) {
+        // Execute an SSE 4.2 instruction.
+        __asm__ __volatile__("crc32 %%eax, %%eax\n" : : : "eax");
+    }
 
-  if (cpu.has_pclmulqdq()) {
-    ExecutePclmulqdq();
-  }
+    if (cpu.has_pclmulqdq()) {
+        ExecutePclmulqdq();
+    }
 
-  if (cpu.has_bmi1()) {
-      ExecuteBmi1();
-  }
+    if (cpu.has_bmi1()) {
+        ExecuteBmi1();
+    }
 
-  if (cpu.has_bmi2()) {
-      ExecuteBmi2();
-  }
+    if (cpu.has_bmi2()) {
+        ExecuteBmi2();
+    }
 
-  if (cpu.has_fma3()) {
-      EXPECT_TRUE(cpu.has_avx());
-      ExecuteFma3();
-  }
+    if (cpu.has_fma3()) {
+        EXPECT_TRUE(cpu.has_avx());
+        ExecuteFma3();
+    }
 
-  if (cpu.has_avx2()) {
-      EXPECT_TRUE(cpu.has_avx());
-      ExecuteAvx2();
-  }
+    if (cpu.has_avx2()) {
+        EXPECT_TRUE(cpu.has_avx());
+        ExecuteAvx2();
+    }
 
-  if (cpu.has_avx512f()) {
-      EXPECT_TRUE(cpu.has_avx2());
-      ExecuteAvx512f();
-  }
+    if (cpu.has_avx512f()) {
+        EXPECT_TRUE(cpu.has_avx2());
+        ExecuteAvx512f();
+    }
 
-  if (cpu.has_fast_avx512()) {
-      EXPECT_TRUE(cpu.has_avx512f());
-      ExecuteFastAvx512();
-      EXPECT_EQ(cpu.GetIntelMicroArchitecture(), butil::CPU::AVX512F);
-  } else if (cpu.has_avx2()) {
-      EXPECT_EQ(cpu.GetIntelMicroArchitecture(), butil::CPU::AVX2);
-  } else if (cpu.has_avx()) {
-      EXPECT_EQ(cpu.GetIntelMicroArchitecture(), butil::CPU::AVX);
-  }
+    if (cpu.has_fast_avx512()) {
+        EXPECT_TRUE(cpu.has_avx512f());
+        ExecuteFastAvx512();
+        EXPECT_EQ(cpu.GetIntelMicroArchitecture(), butil::CPU::AVX512F);
+    } else if (cpu.has_avx2()) {
+        EXPECT_EQ(cpu.GetIntelMicroArchitecture(), butil::CPU::AVX2);
+    } else if (cpu.has_avx()) {
+        EXPECT_EQ(cpu.GetIntelMicroArchitecture(), butil::CPU::AVX);
+    }
 #endif
 
 #endif

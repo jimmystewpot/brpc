@@ -17,13 +17,13 @@ namespace butil {
 namespace internal {
 
 enum X86ExtFeatureBits : uint8_t {
-    kExtFeaturePclmulqdq = 1 << 0,
-    kExtFeatureAvx2 = 1 << 1,
-    kExtFeatureBmi1 = 1 << 2,
-    kExtFeatureBmi2 = 1 << 3,
-    kExtFeatureFma3 = 1 << 4,
-    kExtFeatureAvx512f = 1 << 5,
-    kExtFeatureFastAvx512 = 1 << 6,
+    kExtFeaturePclmulqdq = static_cast<uint8_t>(1U << 0),
+    kExtFeatureAvx2 = static_cast<uint8_t>(1U << 1),
+    kExtFeatureBmi1 = static_cast<uint8_t>(1U << 2),
+    kExtFeatureBmi2 = static_cast<uint8_t>(1U << 3),
+    kExtFeatureFma3 = static_cast<uint8_t>(1U << 4),
+    kExtFeatureAvx512f = static_cast<uint8_t>(1U << 5),
+    kExtFeatureFastAvx512 = static_cast<uint8_t>(1U << 6),
 };
 
 BUTIL_EXPORT uint8_t ComputeX86ExtendedFeatures(uint32_t num_ids,
@@ -31,6 +31,8 @@ BUTIL_EXPORT uint8_t ComputeX86ExtendedFeatures(uint32_t num_ids,
                                                 uint32_t leaf7_ebx,
                                                 uint32_t leaf7_ecx,
                                                 uint64_t xcr0);
+BUTIL_EXPORT bool HasExtendedCpuLeaf(uint32_t max_extended_leaf,
+                                     uint32_t target_leaf);
 
 }  // namespace internal
 #endif
@@ -79,16 +81,16 @@ class BUTIL_EXPORT CPU {
     // to workaround a bug in NSS but |has_avx()| is what you want.
     bool has_avx_hardware() const { return has_avx_hardware_; }
     bool has_aesni() const { return has_aesni_; }
-    bool has_pclmulqdq() const { return (ext_features_ & (1 << 0)) != 0; }
-    bool has_avx2() const { return (ext_features_ & (1 << 1)) != 0; }
-    bool has_bmi1() const { return (ext_features_ & (1 << 2)) != 0; }
-    bool has_bmi2() const { return (ext_features_ & (1 << 3)) != 0; }
-    bool has_fma3() const { return (ext_features_ & (1 << 4)) != 0; }
-    bool has_avx512f() const { return (ext_features_ & (1 << 5)) != 0; }
+    bool has_pclmulqdq() const { return (ext_features_ & (1U << 0)) != 0; }
+    bool has_avx2() const { return (ext_features_ & (1U << 1)) != 0; }
+    bool has_bmi1() const { return (ext_features_ & (1U << 2)) != 0; }
+    bool has_bmi2() const { return (ext_features_ & (1U << 3)) != 0; }
+    bool has_fma3() const { return (ext_features_ & (1U << 4)) != 0; }
+    bool has_avx512f() const { return (ext_features_ & (1U << 5)) != 0; }
     // Returns true only when the CPU and OS support the full Ice Lake / AMD Zen
     // 4 AVX-512 feature bundle (AVX512F + DQ + CD + BW + VL + VBMI + VBMI2)
     // that avoids Skylake-X / Cascade Lake 512-bit frequency throttling.
-    bool has_fast_avx512() const { return (ext_features_ & (1 << 6)) != 0; }
+    bool has_fast_avx512() const { return (ext_features_ & (1U << 6)) != 0; }
     bool has_non_stop_time_stamp_counter() const {
         return has_non_stop_time_stamp_counter_;
     }

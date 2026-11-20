@@ -18,8 +18,8 @@
 
 #if defined(ARCH_CPU_X86_FAMILY)
 #if defined(_MSC_VER)
-#include <intrin.h>
 #include <immintrin.h>  // For _xgetbv()
+#include <intrin.h>
 #endif
 #endif
 
@@ -27,15 +27,17 @@ namespace butil {
 
 namespace internal {
 
+#if defined(ARCH_CPU_X86_FAMILY) || defined(UNIT_TEST)
+
 #if !defined(UNIT_TEST)
 enum X86ExtFeatureBits : uint8_t {
-    kExtFeaturePclmulqdq = 1 << 0,
-    kExtFeatureAvx2 = 1 << 1,
-    kExtFeatureBmi1 = 1 << 2,
-    kExtFeatureBmi2 = 1 << 3,
-    kExtFeatureFma3 = 1 << 4,
-    kExtFeatureAvx512f = 1 << 5,
-    kExtFeatureFastAvx512 = 1 << 6,
+    kExtFeaturePclmulqdq = static_cast<uint8_t>(1U << 0),
+    kExtFeatureAvx2 = static_cast<uint8_t>(1U << 1),
+    kExtFeatureBmi1 = static_cast<uint8_t>(1U << 2),
+    kExtFeatureBmi2 = static_cast<uint8_t>(1U << 3),
+    kExtFeatureFma3 = static_cast<uint8_t>(1U << 4),
+    kExtFeatureAvx512f = static_cast<uint8_t>(1U << 5),
+    kExtFeatureFastAvx512 = static_cast<uint8_t>(1U << 6),
 };
 #endif
 
@@ -86,6 +88,15 @@ static
     }
     return ext;
 }
+
+#if !defined(UNIT_TEST)
+static
+#endif
+    bool HasExtendedCpuLeaf(uint32_t max_extended_leaf, uint32_t target_leaf) {
+    return max_extended_leaf >= 0x80000000U && max_extended_leaf >= target_leaf;
+}
+
+#endif  // defined(ARCH_CPU_X86_FAMILY) || defined(UNIT_TEST)
 
 }  // namespace internal
 
@@ -167,17 +178,20 @@ void CpuidEx(int cpu_info[4], int info_type, int info_index) {
 // _xgetbv returns the value of an Intel Extended Control Register (XCR).
 // Currently only XCR0 is defined by Intel so |xcr| should always be zero.
 uint64_t _xgetbv(uint32_t xcr) {
-  uint32_t eax, edx;
+    uint32_t eax, edx;
 
 // NOTE(gejun): xgetbv does not exist in gcc before 4.4, disable the use of
 // AVX instruction set.
-#if defined(COMPILER_GCC) &&                                    \
+#if defined(COMPILER_GCC) && \
     (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4))
-  __asm__ volatile ("xgetbv" : "=a" (eax), "=d" (edx) : "c" (xcr));
+    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(xcr));
 #else
-  __asm__ volatile (".byte 0x0f, 0x01, 0xd0" : "=a"(eax),"=d"(edx) : "c"(xcr) : );
+    __asm__ volatile(".byte 0x0f, 0x01, 0xd0"
+                     : "=a"(eax), "=d"(edx)
+                     : "c"(xcr)
+                     :);
 #endif
-  return (static_cast<uint64_t>(edx) << 32) | eax;
+    return (static_cast<uint64_t>(edx) << 32) | eax;
 }
 
 #endif  // !_MSC_VER
@@ -190,45 +204,45 @@ uint64_t _xgetbv(uint32_t xcr) {
 // arm64) and is shown once per CPU. "Processor" is used in earler versions and
 // is shown only once at the top of /proc/cpuinfo regardless of the number CPUs.
 std::string ParseCpuInfo() {
-  const char kModelNamePrefix[] = "model name\t: ";
-  const char kProcessorPrefix[] = "Processor\t: ";
-  std::string contents;
-  ReadFileToString(FilePath("/proc/cpuinfo"), &contents);
-  DCHECK(!contents.empty());
-  std::string cpu_brand;
-  if (!contents.empty()) {
-    std::istringstream iss(contents);
-    std::string line;
-    while (std::getline(iss, line)) {
-      if (line.compare(0, strlen(kModelNamePrefix), kModelNamePrefix) == 0) {
-        cpu_brand.assign(line.substr(strlen(kModelNamePrefix)));
-        break;
-      }
-      if (line.compare(0, strlen(kProcessorPrefix), kProcessorPrefix) == 0) {
-        cpu_brand.assign(line.substr(strlen(kProcessorPrefix)));
-        break;
-      }
+    const char kModelNamePrefix[] = "model name\t: ";
+    const char kProcessorPrefix[] = "Processor\t: ";
+    std::string contents;
+    ReadFileToString(FilePath("/proc/cpuinfo"), &contents);
+    DCHECK(!contents.empty());
+    std::string cpu_brand;
+    if (!contents.empty()) {
+        std::istringstream iss(contents);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (line.compare(0, strlen(kModelNamePrefix), kModelNamePrefix) ==
+                0) {
+                cpu_brand.assign(line.substr(strlen(kModelNamePrefix)));
+                break;
+            }
+            if (line.compare(0, strlen(kProcessorPrefix), kProcessorPrefix) ==
+                0) {
+                cpu_brand.assign(line.substr(strlen(kProcessorPrefix)));
+                break;
+            }
+        }
     }
-  }
-  return cpu_brand;
+    return cpu_brand;
 }
 
 class LazyCpuInfoValue {
- public:
-  LazyCpuInfoValue() : value_(ParseCpuInfo()) {}
-  const std::string& value() { return value_; }
+   public:
+    LazyCpuInfoValue() : value_(ParseCpuInfo()) {}
+    const std::string& value() { return value_; }
 
- private:
-  const std::string value_;
-  DISALLOW_COPY_AND_ASSIGN(LazyCpuInfoValue);
+   private:
+    const std::string value_;
+    DISALLOW_COPY_AND_ASSIGN(LazyCpuInfoValue);
 };
 
 butil::LazyInstance<LazyCpuInfoValue> g_lazy_cpu_brand =
     LAZY_INSTANCE_INITIALIZER;
 
-const std::string& CpuBrandInfo() {
-  return g_lazy_cpu_brand.Get().value();
-}
+const std::string& CpuBrandInfo() { return g_lazy_cpu_brand.Get().value(); }
 
 #endif  // defined(ARCH_CPU_ARM_FAMILY) && (defined(OS_ANDROID) ||
         // defined(OS_LINUX))
@@ -237,92 +251,98 @@ const std::string& CpuBrandInfo() {
 
 void CPU::Initialize() {
 #if defined(ARCH_CPU_X86_FAMILY)
-  int cpu_info[4] = {-1};
-  char cpu_string[48];
+    int cpu_info[4] = {-1};
+    char cpu_string[48];
 
-  // __cpuid with an InfoType argument of 0 returns the number of
-  // valid Ids in CPUInfo[0] and the CPU identification string in
-  // the other three array elements. The CPU identification string is
-  // not in linear order. The code below arranges the information
-  // in a human readable form. The human readable order is CPUInfo[1] |
-  // CPUInfo[3] | CPUInfo[2]. CPUInfo[2] and CPUInfo[3] are swapped
-  // before using memcpy to copy these three array elements to cpu_string.
-  __cpuid(cpu_info, 0);
-  int num_ids = cpu_info[0];
-  std::swap(cpu_info[2], cpu_info[3]);
-  memcpy(cpu_string, &cpu_info[1], 3 * sizeof(cpu_info[1]));
-  cpu_vendor_.assign(cpu_string, 3 * sizeof(cpu_info[1]));
+    // __cpuid with an InfoType argument of 0 returns the number of
+    // valid Ids in CPUInfo[0] and the CPU identification string in
+    // the other three array elements. The CPU identification string is
+    // not in linear order. The code below arranges the information
+    // in a human readable form. The human readable order is CPUInfo[1] |
+    // CPUInfo[3] | CPUInfo[2]. CPUInfo[2] and CPUInfo[3] are swapped
+    // before using memcpy to copy these three array elements to cpu_string.
+    __cpuid(cpu_info, 0);
+    int num_ids = cpu_info[0];
+    std::swap(cpu_info[2], cpu_info[3]);
+    memcpy(cpu_string, &cpu_info[1], 3 * sizeof(cpu_info[1]));
+    cpu_vendor_.assign(cpu_string, 3 * sizeof(cpu_info[1]));
 
-  // Interpret CPU feature information.
-  if (num_ids > 0) {
-    __cpuid(cpu_info, 1);
-    signature_ = cpu_info[0];
-    stepping_ = cpu_info[0] & 0xf;
-    model_ = ((cpu_info[0] >> 4) & 0xf) + ((cpu_info[0] >> 12) & 0xf0);
-    family_ = (cpu_info[0] >> 8) & 0xf;
-    type_ = (cpu_info[0] >> 12) & 0x3;
-    ext_model_ = (cpu_info[0] >> 16) & 0xf;
-    ext_family_ = (cpu_info[0] >> 20) & 0xff;
-    has_mmx_ =   (cpu_info[3] & 0x00800000) != 0;
-    has_sse_ =   (cpu_info[3] & 0x02000000) != 0;
-    has_sse2_ =  (cpu_info[3] & 0x04000000) != 0;
-    has_sse3_ =  (cpu_info[2] & 0x00000001) != 0;
-    has_ssse3_ = (cpu_info[2] & 0x00000200) != 0;
-    has_sse41_ = (cpu_info[2] & 0x00080000) != 0;
-    has_sse42_ = (cpu_info[2] & 0x00100000) != 0;
-    has_avx_hardware_ =
-                 (cpu_info[2] & 0x10000000) != 0;
-    // AVX instructions will generate an illegal instruction exception unless
-    //   a) they are supported by the CPU,
-    //   b) XSAVE is supported by the CPU and
-    //   c) XSAVE is enabled by the kernel.
-    // See http://software.intel.com/en-us/blogs/2011/04/14/is-avx-enabled
-    //
-    // In addition, we have observed some crashes with the xgetbv instruction
-    // even after following Intel's example code. (See crbug.com/375968.)
-    // Because of that, we also test the XSAVE bit because its description in
-    // the CPUID documentation suggests that it signals xgetbv support.
-    const bool has_xsave = (cpu_info[2] & 0x04000000) != 0 /* XSAVE */ &&
-                           (cpu_info[2] & 0x08000000) != 0 /* OSXSAVE */;
-    const uint64_t xcr0 = has_xsave ? _xgetbv(0) : 0;
-    has_avx_ = has_avx_hardware_ && has_xsave &&
-               (xcr0 & 6) == 6 /* XSAVE enabled by kernel */;
-    has_aesni_ = (cpu_info[2] & 0x02000000) != 0;
+    // Interpret CPU feature information.
+    if (num_ids > 0) {
+        __cpuid(cpu_info, 1);
+        signature_ = cpu_info[0];
+        stepping_ = cpu_info[0] & 0xf;
+        model_ = ((cpu_info[0] >> 4) & 0xf) + ((cpu_info[0] >> 12) & 0xf0);
+        family_ = (cpu_info[0] >> 8) & 0xf;
+        type_ = (cpu_info[0] >> 12) & 0x3;
+        ext_model_ = (cpu_info[0] >> 16) & 0xf;
+        ext_family_ = (cpu_info[0] >> 20) & 0xff;
+        has_mmx_ = (cpu_info[3] & 0x00800000) != 0;
+        has_sse_ = (cpu_info[3] & 0x02000000) != 0;
+        has_sse2_ = (cpu_info[3] & 0x04000000) != 0;
+        has_sse3_ = (cpu_info[2] & 0x00000001) != 0;
+        has_ssse3_ = (cpu_info[2] & 0x00000200) != 0;
+        has_sse41_ = (cpu_info[2] & 0x00080000) != 0;
+        has_sse42_ = (cpu_info[2] & 0x00100000) != 0;
+        has_avx_hardware_ = (cpu_info[2] & 0x10000000) != 0;
+        // AVX instructions will generate an illegal instruction exception
+        // unless
+        //   a) they are supported by the CPU,
+        //   b) XSAVE is supported by the CPU and
+        //   c) XSAVE is enabled by the kernel.
+        // See http://software.intel.com/en-us/blogs/2011/04/14/is-avx-enabled
+        //
+        // In addition, we have observed some crashes with the xgetbv
+        // instruction even after following Intel's example code. (See
+        // crbug.com/375968.) Because of that, we also test the XSAVE bit
+        // because its description in the CPUID documentation suggests that it
+        // signals xgetbv support.
+        const bool has_xsave = (cpu_info[2] & 0x04000000) != 0 /* XSAVE */ &&
+                               (cpu_info[2] & 0x08000000) != 0 /* OSXSAVE */;
+        const uint64_t xcr0 = has_xsave ? _xgetbv(0) : 0;
+        has_avx_ = has_avx_hardware_ && has_xsave &&
+                   (xcr0 & 6) == 6 /* XSAVE enabled by kernel */;
+        has_aesni_ = (cpu_info[2] & 0x02000000) != 0;
 
-    int cpu_info7[4] = {0};
-    if (num_ids >= 7) {
-        CpuidEx(cpu_info7, 7, 0);
+        int cpu_info7[4] = {0};
+        if (num_ids >= 7) {
+            CpuidEx(cpu_info7, 7, 0);
+        }
+        ext_features_ = internal::ComputeX86ExtendedFeatures(
+            static_cast<uint32_t>(num_ids), static_cast<uint32_t>(cpu_info[2]),
+            static_cast<uint32_t>(cpu_info7[1]),
+            static_cast<uint32_t>(cpu_info7[2]), xcr0);
     }
-    ext_features_ = internal::ComputeX86ExtendedFeatures(
-        static_cast<uint32_t>(num_ids), static_cast<uint32_t>(cpu_info[2]),
-        static_cast<uint32_t>(cpu_info7[1]),
-        static_cast<uint32_t>(cpu_info7[2]), xcr0);
-  }
 
-  // Get the brand string of the cpu.
-  __cpuid(cpu_info, 0x80000000);
-  const int parameter_end = 0x80000004;
-  int max_parameter = cpu_info[0];
+    // Get the brand string of the cpu.
+    __cpuid(cpu_info, static_cast<int>(0x80000000U));
+    const uint32_t max_parameter = static_cast<uint32_t>(cpu_info[0]);
+    const uint32_t kParameterEnd = 0x80000004U;
 
-  if (cpu_info[0] >= parameter_end) {
-    char* cpu_string_ptr = cpu_string;
+    if (internal::HasExtendedCpuLeaf(max_parameter, kParameterEnd)) {
+        char* cpu_string_ptr = cpu_string;
 
-    for (int parameter = 0x80000002; parameter <= parameter_end &&
-         cpu_string_ptr < &cpu_string[sizeof(cpu_string)]; parameter++) {
-      __cpuid(cpu_info, parameter);
-      memcpy(cpu_string_ptr, cpu_info, sizeof(cpu_info));
-      cpu_string_ptr += sizeof(cpu_info);
+        for (uint32_t parameter = 0x80000002U;
+             parameter <= kParameterEnd &&
+             cpu_string_ptr < &cpu_string[sizeof(cpu_string)];
+             ++parameter) {
+            __cpuid(cpu_info, static_cast<int>(parameter));
+            memcpy(cpu_string_ptr, cpu_info, sizeof(cpu_info));
+            cpu_string_ptr += sizeof(cpu_info);
+        }
+        cpu_brand_.assign(cpu_string,
+                          static_cast<size_t>(cpu_string_ptr - cpu_string));
     }
-    cpu_brand_.assign(cpu_string, cpu_string_ptr - cpu_string);
-  }
 
-  const int parameter_containing_non_stop_time_stamp_counter = 0x80000007;
-  if (max_parameter >= parameter_containing_non_stop_time_stamp_counter) {
-    __cpuid(cpu_info, parameter_containing_non_stop_time_stamp_counter);
-    has_non_stop_time_stamp_counter_ = (cpu_info[3] & (1 << 8)) != 0;
-  }
+    const uint32_t kParameterContainingNonStopTsc = 0x80000007U;
+    if (internal::HasExtendedCpuLeaf(max_parameter,
+                                     kParameterContainingNonStopTsc)) {
+        __cpuid(cpu_info, static_cast<int>(kParameterContainingNonStopTsc));
+        has_non_stop_time_stamp_counter_ =
+            (static_cast<uint32_t>(cpu_info[3]) & (1U << 8)) != 0;
+    }
 #elif defined(ARCH_CPU_ARM_FAMILY) && (defined(OS_ANDROID) || defined(OS_LINUX))
-  cpu_brand_.assign(CpuBrandInfo());
+    cpu_brand_.assign(CpuBrandInfo());
 #endif
 }
 
