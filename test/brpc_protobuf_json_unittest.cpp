@@ -19,6 +19,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <gtest/gtest.h>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <fstream>
@@ -2129,6 +2130,130 @@ static std::string RunBaseWriter(const char* str, size_t length) {
     return std::string(os.GetString(), os.GetSize());
 }
 
+struct PutsTrackingBuffer {
+    typedef BUTIL_RAPIDJSON_NAMESPACE::StringBuffer::Ch Ch;
+    void Put(Ch c) {
+        ++put_calls;
+        inner.Put(c);
+    }
+    void Puts(const Ch* c, size_t length) {
+        ++puts_calls;
+        inner.Puts(c, length);
+    }
+    void Flush() { inner.Flush(); }
+    const Ch* GetString() const { return inner.GetString(); }
+    size_t GetSize() const { return inner.GetSize(); }
+
+    BUTIL_RAPIDJSON_NAMESPACE::StringBuffer inner;
+    size_t put_calls = 0;
+    size_t puts_calls = 0;
+};
+
+static void RunOptimizedWriterKeyAnd1Arg() {
+    const char* kUtf8Key =
+        "\xE4\xB8\xAD\xE6\x96\x87_key_with_16B_prefix_\"escaped\"";
+    const char* kUtf8Key1Arg =
+        "\xE4\xB8\xAD\xE6\x96\x87_1arg_key_with_16B_prefix_\"esc\"";
+    const char* kUtf8Val =
+        "\xE4\xB8\xAD\xE6\x96\x87_val_with_16B_prefix_\n_end";
+    const BUTIL_RAPIDJSON_NAMESPACE::SizeType key_len =
+        static_cast<BUTIL_RAPIDJSON_NAMESPACE::SizeType>(std::strlen(kUtf8Key));
+    const BUTIL_RAPIDJSON_NAMESPACE::SizeType key1_len =
+        static_cast<BUTIL_RAPIDJSON_NAMESPACE::SizeType>(
+            std::strlen(kUtf8Key1Arg));
+
+    // 1. 1-argument String(const Ch*) overload (previously hidden by
+    // OptimizedWriter::String(const Ch*, SizeType, bool)).
+    {
+        PutsTrackingBuffer opt_os;
+        BUTIL_RAPIDJSON_NAMESPACE::OptimizedWriter<PutsTrackingBuffer> writer(
+            opt_os);
+        ASSERT_TRUE(writer.String(kUtf8Key));
+        EXPECT_GT(opt_os.puts_calls, 0u);
+        const std::string actual(opt_os.GetString(), opt_os.GetSize());
+        EXPECT_EQ(WriteStringScalarReference(kUtf8Key, key_len), actual);
+
+        BUTIL_RAPIDJSON_NAMESPACE::StringBuffer base_os;
+        BUTIL_RAPIDJSON_NAMESPACE::Writer<
+            BUTIL_RAPIDJSON_NAMESPACE::StringBuffer>
+            base_writer(base_os);
+        ASSERT_TRUE(base_writer.String(kUtf8Key));
+        EXPECT_EQ(std::string(base_os.GetString(), base_os.GetSize()), actual);
+    }
+
+    // 2. Key(str, len) and 1-argument Key(const Ch*) inside
+    // StartObject..EndObject, verifying dispatch through
+    // OptimizedWriter::WriteString (bulk Puts) and unescaped preservation of
+    // valid UTF-8 high bytes alongside escaping.
+    {
+        PutsTrackingBuffer opt_os;
+        BUTIL_RAPIDJSON_NAMESPACE::OptimizedWriter<PutsTrackingBuffer> writer(
+            opt_os);
+        ASSERT_TRUE(writer.StartObject());
+        ASSERT_TRUE(writer.Key(kUtf8Key, key_len));
+        const size_t puts_after_key2 = opt_os.puts_calls;
+        ASSERT_GT(puts_after_key2, 0u);
+        ASSERT_TRUE(writer.String(kUtf8Val));
+        const size_t puts_after_val1 = opt_os.puts_calls;
+        ASSERT_GT(puts_after_val1, puts_after_key2);
+        ASSERT_TRUE(writer.Key(kUtf8Key1Arg));
+        const size_t puts_after_key1 = opt_os.puts_calls;
+        ASSERT_GT(puts_after_key1, puts_after_val1);
+        ASSERT_TRUE(writer.String("value_16B_plain!!"));
+        ASSERT_GT(opt_os.puts_calls, puts_after_key1);
+        ASSERT_TRUE(writer.EndObject());
+
+        BUTIL_RAPIDJSON_NAMESPACE::StringBuffer base_os;
+        BUTIL_RAPIDJSON_NAMESPACE::Writer<
+            BUTIL_RAPIDJSON_NAMESPACE::StringBuffer>
+            base_writer(base_os);
+        ASSERT_TRUE(base_writer.StartObject());
+        ASSERT_TRUE(base_writer.Key(kUtf8Key, key_len));
+        ASSERT_TRUE(base_writer.String(kUtf8Val));
+        ASSERT_TRUE(base_writer.Key(kUtf8Key1Arg));
+        ASSERT_TRUE(base_writer.String("value_16B_plain!!"));
+        ASSERT_TRUE(base_writer.EndObject());
+
+        const std::string actual(opt_os.GetString(), opt_os.GetSize());
+        const std::string expected_base(base_os.GetString(), base_os.GetSize());
+        const std::string expected =
+            "{" + WriteStringScalarReference(kUtf8Key, key_len) + ":" +
+            WriteStringScalarReference(kUtf8Val, std::strlen(kUtf8Val)) + "," +
+            WriteStringScalarReference(kUtf8Key1Arg, key1_len) +
+            ":\"value_16B_plain!!\"}";
+        ASSERT_EQ(expected, actual);
+        ASSERT_EQ(expected_base, actual);
+        EXPECT_NE(
+            actual.find(
+                "\xE4\xB8\xAD\xE6\x96\x87_key_with_16B_prefix_\\\"escaped\\\""),
+            std::string::npos);
+
+        BUTIL_RAPIDJSON_NAMESPACE::Document doc;
+        doc.Parse(actual.c_str());
+        ASSERT_FALSE(doc.HasParseError());
+        ASSERT_TRUE(doc.IsObject());
+        ASSERT_TRUE(doc.HasMember(kUtf8Key));
+        EXPECT_STREQ(kUtf8Val, doc[kUtf8Key].GetString());
+        ASSERT_TRUE(doc.HasMember(kUtf8Key1Arg));
+        EXPECT_STREQ("value_16B_plain!!", doc[kUtf8Key1Arg].GetString());
+    }
+
+    // 3. Empty string and 3-arg Key(str, len, copy) / String(str, len, copy).
+    {
+        PutsTrackingBuffer opt_os;
+        BUTIL_RAPIDJSON_NAMESPACE::OptimizedWriter<PutsTrackingBuffer> writer(
+            opt_os);
+        ASSERT_TRUE(writer.StartObject());
+        ASSERT_TRUE(writer.Key("", 0, true));
+        ASSERT_TRUE(writer.String("", 0, true));
+        ASSERT_TRUE(writer.Key("k3", 2, false));
+        ASSERT_TRUE(writer.String(""));
+        ASSERT_TRUE(writer.EndObject());
+        EXPECT_EQ("{\"\":\"\",\"k3\":\"\"}",
+                  std::string(opt_os.GetString(), opt_os.GetSize()));
+    }
+}
+
 TEST_F(ProtobufJsonTest, rapidjson_simd_whitespace_and_macro) {
 #if defined(__SSE2__) && !defined(BUTIL_RAPIDJSON_SANITIZER_ACTIVE)
 #if defined(RAPIDJSON_SIMD) && defined(RAPIDJSON_SSE2)
@@ -2239,7 +2364,53 @@ TEST_F(ProtobufJsonTest, optimized_writer_differential_and_guard_page) {
         }
     }
 
-    // 3. Guard-page boundary test (mmap + mprotect PROT_NONE).
+    // 3. Misaligned input buffer pointers (align_offset = 0..15) inside tight
+    // canary-guarded buffers for lengths 0..96.
+    {
+        const char kCanary = '\x01';
+        alignas(16) char guarded_buf[16 + 96 + 16];
+        for (size_t align_offset = 0; align_offset < 16; ++align_offset) {
+            for (size_t len = 0; len <= 96; ++len) {
+                std::memset(guarded_buf, kCanary, sizeof(guarded_buf));
+                char* ptr = guarded_buf + align_offset;
+                ASSERT_EQ(align_offset,
+                          reinterpret_cast<std::uintptr_t>(ptr) & 15U);
+
+                std::memset(ptr, 'm', len);
+                ASSERT_EQ(WriteStringScalarReference(ptr, len),
+                          RunOptimizedWriter(ptr, len))
+                    << "align_offset=" << align_offset << " len=" << len;
+                ASSERT_EQ(RunBaseWriter(ptr, len), RunOptimizedWriter(ptr, len))
+                    << "align_offset=" << align_offset << " len=" << len;
+
+                if (len > 0) {
+                    ptr[0] = '\"';
+                    ptr[len / 2] = '\n';
+                    ptr[len - 1] = '\\';
+                    if (len > 3) {
+                        ptr[1] = '\xE4';
+                        ptr[2] = '\xB8';
+                    }
+                    ASSERT_EQ(WriteStringScalarReference(ptr, len),
+                              RunOptimizedWriter(ptr, len))
+                        << "align_offset=" << align_offset << " len=" << len;
+                }
+
+                for (size_t i = 0; i < align_offset; ++i) {
+                    ASSERT_EQ(kCanary, guarded_buf[i]);
+                }
+                for (size_t i = align_offset + len; i < sizeof(guarded_buf);
+                     ++i) {
+                    ASSERT_EQ(kCanary, guarded_buf[i]);
+                }
+            }
+        }
+    }
+
+    // 4. Key() and 1-argument String()/Key() dispatch through WriteString.
+    RunOptimizedWriterKeyAnd1Arg();
+
+    // 5. Guard-page boundary test (mmap + mprotect PROT_NONE).
     const size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
     void* mapping = mmap(nullptr, page_size * 2, PROT_READ | PROT_WRITE,
                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -2261,7 +2432,7 @@ TEST_F(ProtobufJsonTest, optimized_writer_differential_and_guard_page) {
     }
     ASSERT_EQ(0, munmap(mapping, page_size * 2));
 
-    // 4. Throughput benchmark across 16 B, 64 B, 256 B, and 4096 B strings.
+    // 6. Throughput benchmark across 16 B, 64 B, 256 B, and 4096 B strings.
     for (size_t bench_len : {16, 64, 256, 4096}) {
         std::string payload(bench_len, 'k');
         const int iters = bench_len <= 256 ? 100000 : 20000;
@@ -2285,6 +2456,33 @@ TEST_F(ProtobufJsonTest, optimized_writer_differential_and_guard_page) {
         printf("OptimizedWriter benchmark len=%zu: %.2f MB/s (total_out=%zu)\n",
                bench_len, mb_per_s, total_out);
     }
+}
+
+TEST_F(ProtobufJsonTest, optimized_writer_key_json2pb_map) {
+    const std::string utf8_key =
+        "\xE4\xB8\xAD\xE6\x96\x87_key_with_16B_prefix_\"escaped\"";
+    const std::string utf8_val =
+        "\xE4\xB8\xAD\xE6\x96\x87_val_with_16B_prefix_\n_end";
+
+    AddressStringMapStd asms;
+    asms.set_addr("baidu.com");
+    (*asms.mutable_contacts())[utf8_key] = utf8_val;
+
+    std::string json;
+    std::string error;
+    ASSERT_TRUE(json2pb::ProtoMessageToJson(asms, &json, &error)) << error;
+    EXPECT_NE(
+        json.find(
+            "\"\xE4\xB8\xAD\xE6\x96\x87_key_with_16B_prefix_\\\"escaped\\\"\""),
+        std::string::npos);
+
+    AddressStringMapStd roundtrip;
+    json2pb::Json2PbOptions options;
+    ASSERT_TRUE(json2pb::JsonToProtoMessage(json, &roundtrip, options, &error))
+        << error;
+    ASSERT_EQ(1u, roundtrip.contacts().size());
+    ASSERT_EQ(1u, roundtrip.contacts().count(utf8_key));
+    EXPECT_EQ(utf8_val, roundtrip.contacts().at(utf8_key));
 }
 
 }  // namespace
