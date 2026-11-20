@@ -2340,7 +2340,7 @@ TEST_F(ProtobufJsonTest, optimized_writer_differential_and_guard_page) {
                                        31, 32, 33, 47, 48, 63, 64};
     const char kEscapables[] = {'\"', '\\', '\n', '\r',   '\t',
                                 '\b', '\f', '\0', '\x01', '\x1f'};
-    for (size_t len : {16, 31, 32, 33, 48, 64, 79, 96}) {
+    for (size_t len : {16U, 31U, 32U, 33U, 48U, 64U, 79U, 96U}) {
         for (char esc1 : kEscapables) {
             for (char esc2 : kEscapables) {
                 std::string s(len, 'x');
@@ -2433,7 +2433,7 @@ TEST_F(ProtobufJsonTest, optimized_writer_differential_and_guard_page) {
     ASSERT_EQ(0, munmap(mapping, page_size * 2));
 
     // 6. Throughput benchmark across 16 B, 64 B, 256 B, and 4096 B strings.
-    for (size_t bench_len : {16, 64, 256, 4096}) {
+    for (size_t bench_len : {16U, 64U, 256U, 4096U}) {
         std::string payload(bench_len, 'k');
         const int iters = bench_len <= 256 ? 100000 : 20000;
         butil::Timer timer;

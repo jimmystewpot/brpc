@@ -276,7 +276,8 @@ inline const char *SkipWhitespace_SIMD(const char* p) {
         return p;
 
     // 16-byte align to the next boundary
-    const char* nextAligned = reinterpret_cast<const char*>((reinterpret_cast<size_t>(p) + 15) & ~15);
+    const char* nextAligned = reinterpret_cast<const char*>(
+        (reinterpret_cast<size_t>(p) + 15U) & ~static_cast<size_t>(15U));
     while (p != nextAligned)
         if (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')
             ++p;
@@ -284,19 +285,24 @@ inline const char *SkipWhitespace_SIMD(const char* p) {
             return p;
 
     // The rest of string using SIMD
-    static const char whitespace[16] = " \n\r\t";
-    const __m128i w = _mm_load_si128((const __m128i *)&whitespace[0]);
+    alignas(16) static const char whitespace[16] = " \n\r\t";
+    const __m128i w = _mm_load_si128(reinterpret_cast<const __m128i*>(
+        static_cast<const void*>(&whitespace[0])));
 
     for (;; p += 16) {
-        const __m128i s = _mm_load_si128((const __m128i *)p);
-        const unsigned r = _mm_cvtsi128_si32(_mm_cmpistrm(w, s, _SIDD_UBYTE_OPS | _SIDD_CMP_EQUAL_ANY | _SIDD_BIT_MASK | _SIDD_NEGATIVE_POLARITY));
-        if (r != 0) {   // some of characters is non-whitespace
-#ifdef _MSC_VER         // Find the index of first non-whitespace
+        const __m128i s = _mm_load_si128(
+            reinterpret_cast<const __m128i*>(static_cast<const void*>(p)));
+        const unsigned r = static_cast<unsigned>(_mm_cvtsi128_si32(
+            _mm_cmpistrm(w, s,
+                         _SIDD_UBYTE_OPS | _SIDD_CMP_EQUAL_ANY |
+                             _SIDD_BIT_MASK | _SIDD_NEGATIVE_POLARITY)));
+        if (r != 0) {  // some of characters is non-whitespace
+#ifdef _MSC_VER        // Find the index of first non-whitespace
             unsigned long offset;
             _BitScanForward(&offset, r);
             return p + offset;
 #else
-            return p + __builtin_ffs(r) - 1;
+            return p + __builtin_ffs(static_cast<int>(r)) - 1;
 #endif
         }
     }

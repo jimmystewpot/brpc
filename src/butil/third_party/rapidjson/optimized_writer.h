@@ -18,9 +18,9 @@
 #ifndef RAPIDJSON_OPTIMIZED_WRITER_H
 #define RAPIDJSON_OPTIMIZED_WRITER_H
 
-#include "writer.h"
 #include "internal/meta.h"
 #include "internal/strfunc.h"
+#include "writer.h"
 #if defined(__SSE2__)
 #include <emmintrin.h>
 #endif
@@ -47,21 +47,18 @@ public:
     explicit
     OptimizedWriter(OutputStream& os, StackAllocator* stackAllocator = 0, 
                    size_t levelDepth = Base::kDefaultLevelDepth) : 
-        Base(os, stackAllocator, levelDepth) {} 
-    
-    explicit
-    OptimizedWriter(StackAllocator* allocator = 0, 
-                   size_t levelDepth = Base::kDefaultLevelDepth) :
-        Base(allocator, levelDepth) {} 
-    
+        Base(os, stackAllocator, levelDepth) {}
+
+    explicit OptimizedWriter(StackAllocator* allocator = 0,
+                             size_t levelDepth = Base::kDefaultLevelDepth)
+        : Base(allocator, levelDepth) {}
+
     bool String(const Ch* str, SizeType length, bool copy = false) {
         (void)copy;
         Base::Prefix(kStringType);
         return WriteString(str, length);
     }
-    bool String(const Ch* str) {
-        return String(str, internal::StrLen(str));
-    }
+    bool String(const Ch* str) { return String(str, internal::StrLen(str)); }
 #if RAPIDJSON_HAS_STDSTRING
     bool String(const std::basic_string<Ch>& str) {
         return String(str.data(), static_cast<SizeType>(str.size()));
@@ -70,15 +67,13 @@ public:
     bool Key(const Ch* str, SizeType length, bool copy = false) {
         return String(str, length, copy);
     }
-    bool Key(const Ch* str) {
-        return Key(str, internal::StrLen(str));
-    }
+    bool Key(const Ch* str) { return Key(str, internal::StrLen(str)); }
 
-protected:
-    bool WriteString(const Ch* str, SizeType length)  {
-        //if TargetEncoding support Unicode 
-        //and SourceEncoding and TargetEncoding are the same type 
-        //just use memcpy to improve efficiency
+   protected:
+    bool WriteString(const Ch* str, SizeType length) {
+        // if TargetEncoding support Unicode
+        // and SourceEncoding and TargetEncoding are the same type
+        // just use memcpy to improve efficiency
         if (TargetEncoding::supportUnicode &&
             internal::IsSame<SourceEncoding, TargetEncoding>::Value) {
             static const char hexDigits[16] = { '0', '1', '2', '3', '4', '5', '6', '7', 
@@ -105,8 +100,8 @@ protected:
                     const __m128i backslash = _mm_set1_epi8('\\');
                     const __m128i ctrl_max = _mm_set1_epi8(0x1F);
                     while (pos + 16 <= length) {
-                        const __m128i chunk = _mm_loadu_si128(
-                            reinterpret_cast<const __m128i*>(
+                        const __m128i chunk =
+                            _mm_loadu_si128(reinterpret_cast<const __m128i*>(
                                 static_cast<const void*>(str + pos)));
                         const __m128i eq_quote = _mm_cmpeq_epi8(chunk, quote);
                         const __m128i eq_backslash =
