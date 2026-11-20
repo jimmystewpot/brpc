@@ -132,8 +132,8 @@ static void TestAtomicExchange() {
 template <class AtomicType>
 static void TestAtomicIncrementBounds() {
     // Test at rollover boundary between int_max and int_min
-    AtomicType test_val =
-        (static_cast<uint64_t>(1) << (NUM_BITS(AtomicType) - 1));
+    AtomicType test_val = static_cast<AtomicType>(
+        static_cast<uint64_t>(1) << (NUM_BITS(AtomicType) - 1));
     AtomicType value = -1 ^ test_val;
     AtomicType new_value = butil::subtle::NoBarrier_AtomicIncrement(&value, 1);
     EXPECT_EQ(test_val, value);
@@ -273,8 +273,8 @@ static void TestBarrierAtomicIncrement() {
     EXPECT_EQ(s.next_word, next_word_value);
 
     // Test at rollover boundary between int_max and int_min.
-    AtomicType test_val =
-        (static_cast<uint64_t>(1) << (NUM_BITS(AtomicType) - 1));
+    AtomicType test_val = static_cast<AtomicType>(
+        static_cast<uint64_t>(1) << (NUM_BITS(AtomicType) - 1));
     AtomicType value = -1 ^ test_val;
     AtomicType new_value = butil::subtle::Barrier_AtomicIncrement(&value, 1);
     EXPECT_EQ(test_val, value);
@@ -648,12 +648,13 @@ TEST(AtomicOpsTest, MultiThreadedContentionAndOrdering) {
     };
     Channel channels[kNumThreads];
     for (int t = 0; t < kNumThreads; ++t) {
-        channels[t].non_atomic_payloads.assign(kIterations + 1, 0);
+        channels[t].non_atomic_payloads.assign(
+            static_cast<size_t>(kIterations) + 1U, 0);
         butil::subtle::NoBarrier_Store(&channels[t].published_seq, 0);
     }
 
     std::vector<std::thread> threads;
-    threads.reserve(kNumThreads);
+    threads.reserve(static_cast<size_t>(kNumThreads));
     for (int t = 0; t < kNumThreads; ++t) {
         threads.emplace_back([&, t]() {
             const int peer = (t + 1) % kNumThreads;
@@ -690,7 +691,7 @@ TEST(AtomicOpsTest, MultiThreadedContentionAndOrdering) {
 
                 // Publish immutable per-sequence non-atomic payload slot via
                 // Release_Store.
-                channels[t].non_atomic_payloads[i] =
+                channels[t].non_atomic_payloads[static_cast<size_t>(i)] =
                     static_cast<butil::subtle::AtomicWord>(i * 17 + t);
                 butil::subtle::Release_Store(&channels[t].published_seq, i);
 
@@ -701,7 +702,8 @@ TEST(AtomicOpsTest, MultiThreadedContentionAndOrdering) {
                     butil::subtle::Acquire_Load(&channels[peer].published_seq);
                 if (peer_seq > last_seen_peer_seq) {
                     butil::subtle::AtomicWord observed_payload =
-                        channels[peer].non_atomic_payloads[peer_seq];
+                        channels[peer]
+                            .non_atomic_payloads[static_cast<size_t>(peer_seq)];
                     EXPECT_EQ(static_cast<butil::subtle::AtomicWord>(
                                   peer_seq * 17 + peer),
                               observed_payload);
@@ -725,8 +727,9 @@ TEST(AtomicOpsTest, MultiThreadedContentionAndOrdering) {
     for (int t = 0; t < kNumThreads; ++t) {
         EXPECT_EQ(kIterations,
                   butil::subtle::Acquire_Load(&channels[t].published_seq));
-        EXPECT_EQ(static_cast<butil::subtle::AtomicWord>(kIterations * 17 + t),
-                  channels[t].non_atomic_payloads[kIterations]);
+        EXPECT_EQ(
+            static_cast<butil::subtle::AtomicWord>(kIterations * 17 + t),
+            channels[t].non_atomic_payloads[static_cast<size_t>(kIterations)]);
     }
 
     // Single-threaded hot-loop throughput measurement (ns/op).
