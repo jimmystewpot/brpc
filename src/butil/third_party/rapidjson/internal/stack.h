@@ -99,8 +99,9 @@ public:
     // Expansion is run very infrequently, so it is moved to another (probably non-inline) function.
     template<typename T>
     RAPIDJSON_FORCEINLINE T* Push(size_t count = 1) {
-         // Expand the stack if needed
-        if (stackTop_ + sizeof(T) * count >= stackEnd_)
+        // Expand the stack if needed
+        if (!stackTop_ ||
+            static_cast<size_t>(stackEnd_ - stackTop_) < sizeof(T) * count)
             Expand<T>(count);
 
         T* ret = reinterpret_cast<T*>(stackTop_);
@@ -124,7 +125,11 @@ public:
     template<typename T>
     T* Bottom() { return (T*)stack_; }
 
-    Allocator& GetAllocator() { return *allocator_; }
+    Allocator& GetAllocator() {
+        if (!allocator_)
+            ownAllocator_ = allocator_ = RAPIDJSON_NEW(Allocator());
+        return *allocator_;
+    }
     bool Empty() const { return stackTop_ == stack_; }
     size_t GetSize() const { return static_cast<size_t>(stackTop_ - stack_); }
     size_t GetCapacity() const { return static_cast<size_t>(stackEnd_ - stack_); }
